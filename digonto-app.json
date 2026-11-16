@@ -1,0 +1,35 @@
+{
+  "slug": "digonto-vector",
+  "name": "Digonto Vector",
+  "version": "1.3.7",
+  "comment": "Draw logos, shapes and illustrations - easy like CorelDRAW",
+  "entry": "digonto_vector.py",
+  "files": [
+    "digonto_vector.py",
+    "digonto_ui.py",
+    "vkit",
+    "assets",
+    "requirements.txt",
+    "README.txt"
+  ],
+  "requirements": "requirements.txt",
+  "check": "import PySide6.QtWidgets; import vkit.model, vkit.svgio, vkit.tools, vkit.ops, vkit.epsai; import pymupdf",
+  "needs_tk": false,
+  "apt": [
+    "libxcb-cursor0"
+  ],
+  "macos_min": 11,
+  "categories": "Graphics;VectorGraphics;",
+  "keywords": "vector;draw;logo;svg;shapes;illustration;corel;",
+  "wm_class": "digonto-vector",
+  "mime": [
+    "image/svg+xml",
+    "application/postscript",
+    "application/pdf"
+  ],
+  "legacy": {
+    "linux": [],
+    "darwin": [],
+    "windows": []
+  }
+}

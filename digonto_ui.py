@@ -1,0 +1,1360 @@
+"""Shared look of the Digonto programs (same green header, About button and Fusion style as Digonto PDF)."""
+import os
+import sys
+
+from PySide6.QtCore import QEvent, QObject, QSize, QTimer, Qt
+from PySide6.QtWidgets import QWidget  # noqa: E402
+from PySide6.QtGui import QColor, QIcon, QPalette, QPixmap
+from PySide6.QtWidgets import QApplication, QComboBox, QStyledItemDelegate, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+
+GREEN = "#C2395C"
+
+
+def app_icon(here, slug):
+    for n in (256, 128, 64):
+        p = os.path.join(here, "assets", f"{slug}-{n}.png")
+        if os.path.isfile(p):
+            return QIcon(p)
+    return QIcon()
+
+
+def _banner_pixmap(h=76):
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "digonto-banner.png")
+    pm = QPixmap(p)
+    if pm.isNull():
+        return None
+    pm = pm.scaledToHeight(h * 2, Qt.SmoothTransformation)     # 2x for sharpness
+    pm.setDevicePixelRatio(2.0)
+    return pm
+
+
+OFFLINE_NOTE = {
+    "Digonto Audio": "Digonto Audio works completely on your computer. Your sound files never leave it.",
+    "Digonto Images": "Digonto Images never connects to the internet. Your pictures stay on your computer.",
+    "Digonto Vector": "Digonto Vector never connects to the internet. Your drawings stay on your computer.",
+    "Digonto Logo": "Digonto Logo never connects to the internet. Your logos stay on your computer.",
+    "Digonto QR": "Digonto QR never connects to the internet. Your codes are made on your computer.",
+    "Digonto Write": "Digonto Write never connects to the internet. Your documents stay on your computer.",
+    "Digonto Sheets": "Digonto Sheets never connects to the internet. Your spreadsheets stay on your computer.",
+    "Digonto PDF": "Digonto PDF never connects to the internet. Your files stay on your computer.",
+}
+
+
+POPUP_SIZE = (480, 400)          # Quick tips, Shortcuts and About: the same size in every program
+
+
+def about_dialog(parent, title, text, icon=None):
+    """the same About window in every Digonto program: dusk header (banner, name, version), then the description"""
+    import re
+    from PySide6.QtWidgets import QDialog
+    name = QApplication.applicationDisplayName() or title
+    version = ""
+    m = re.search(r"<h3>(.*?)</h3>", text, re.S) or re.search(r"<b>(.*?)</b>(?: *[0-9][0-9.]*)?(?:<br>)?", text, re.S)
+    if m:
+        head = re.sub(r"<[^>]+>", "", m.group(0)).strip()
+        mv = re.search(r"\bv?([0-9][0-9A-Za-z.\-]*)\s*$", head)
+        if mv:
+            version = mv.group(1)
+        text = text.replace(m.group(0), "", 1)
+    text = re.sub(r"^(\s*<br>)+", "", text.strip())
+    text = re.sub(r"<h3>|</h3>", "", text)
+    note = OFFLINE_NOTE.get(name, "")
+    if note and note.split(".")[0] not in re.sub(r"<[^>]+>", "", text):
+        text += ("<p>" + note + "</p>") if "<p>" in text else ("<br><br>" + note)
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("About " + name)
+    dlg.setStyleSheet("QDialog { background:#F6F2FA; } QLabel { color:#1B1040; }")
+    lay = QVBoxLayout(dlg)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(0)
+    head = QWidget()
+    head.setObjectName("abouthead")
+    head.setStyleSheet("#abouthead { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+                       "stop:0 #1D1548, stop:0.55 #4A1F6E, stop:1 #8A2150); }")
+    hl = QHBoxLayout(head)
+    hl.setContentsMargins(18, 14, 26, 14)
+    hl.setSpacing(14)
+    bp = _banner_pixmap(58)
+    if bp is not None:
+        b = QLabel()
+        b.setPixmap(bp)
+        hl.addWidget(b)
+        bar = QWidget()
+        bar.setFixedSize(2, 52)
+        bar.setStyleSheet("background:rgba(255,255,255,0.25);")
+        hl.addWidget(bar)
+    t = QLabel(f"<span style='font-size:18px; font-weight:700; color:white'>{name}</span>"
+               + (f"<br><span style='font-size:13px; color:#E9D5EE'>Version {version}</span>" if version else "")
+               + "<br><span style='font-size:12px; color:#E9D5EE'>Part of the Digonto family of programs</span>")
+    hl.addWidget(t)
+    hl.addStretch()
+    lay.addWidget(head)
+    body = QLabel("<div style='font-size:13px'>" + text.replace("<p>", "<p style='margin:0 0 9px 0'>") + "</div>")
+    body.setWordWrap(True)
+    body.setTextFormat(Qt.RichText)
+    body.setOpenExternalLinks(False)
+    body.setContentsMargins(22, 16, 22, 6)
+    body.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+    from PySide6.QtWidgets import QScrollArea
+    sc = QScrollArea()
+    sc.setWidgetResizable(True)
+    sc.setFrameShape(QScrollArea.NoFrame)
+    sc.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background:#F6F2FA; }")
+    sc.setWidget(body)
+    lay.addWidget(sc, 1)
+    row = QHBoxLayout()
+    row.setContentsMargins(22, 6, 22, 16)
+    row.addStretch()
+    ok = QPushButton("OK")
+    ok.setCursor(Qt.PointingHandCursor)
+    ok.setDefault(True)
+    ok.setStyleSheet("QPushButton{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #FF6F8E,stop:1 #FFB05A); color:#2A1241; "
+                     "border:1px solid #FF6F8E; border-radius:8px; padding:7px 26px; font-size:13px; font-weight:600;}"
+                     "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #FF86A1,stop:1 #FFC273);}")
+    ok.clicked.connect(dlg.accept)
+    row.addWidget(ok)
+    lay.addLayout(row)
+    dlg.setFixedSize(*POPUP_SIZE)
+    dlg.exec()
+
+
+def _styled_question(parent, title, text, buttons=None, default=None):
+    """a Digonto-styled replacement for QMessageBox.question (the native one was cut off on macOS)"""
+    from PySide6.QtWidgets import QDialog, QMessageBox as MB
+    SB = MB.StandardButton
+    buttons = buttons if buttons is not None else (SB.Yes | SB.No)
+    names = [(SB.Save, "Save"), (SB.Discard, "Don't Save"), (SB.Yes, "Yes"), (SB.No, "No"), (SB.Ok, "OK"), (SB.Cancel, "Cancel")]
+    dlg = QDialog(parent)
+    dlg.setWindowTitle(title or "Digonto")
+    dlg.setStyleSheet("QDialog { background:#F6F2FA; } QLabel { color:#1B1040; font-size:13px; }")
+    lay = QVBoxLayout(dlg)
+    lay.setContentsMargins(24, 20, 24, 18)
+    lay.setSpacing(16)
+    lb = QLabel(text)
+    lb.setWordWrap(True)
+    lb.setMinimumWidth(320)
+    lb.setMaximumWidth(460)
+    lay.addWidget(lb)
+    row = QHBoxLayout()
+    row.setSpacing(8)
+    row.addStretch()
+    result = {"v": SB.Cancel if (buttons & SB.Cancel) else SB.No}
+    def pick(b):
+        result["v"] = b
+        dlg.accept()
+    first = None
+    for b, label in reversed(names):                 # Cancel, OK, No, Yes, Don't Save, Save (left to right after reversing again)
+        pass
+    for b, label in [x for x in names if x[0] in (SB.Discard, SB.No, SB.Cancel)] + [x for x in names if x[0] in (SB.Save, SB.Yes, SB.Ok)]:
+        if not (buttons & b):
+            continue
+        btn = QPushButton(label)
+        btn.setMinimumWidth(96)
+        btn.setCursor(Qt.PointingHandCursor)
+        primary = (default == b) if default not in (None, SB.NoButton) else b in (SB.Save, SB.Yes, SB.Ok)
+        if primary:
+            btn.setStyleSheet("QPushButton{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #FF6F8E,stop:1 #FFB05A); color:#2A1241; "
+                              "border:1px solid #FF6F8E; border-radius:7px; padding:7px 18px; font-size:13px; font-weight:600;}")
+            btn.setDefault(True)
+        else:
+            btn.setStyleSheet("QPushButton{background:white; color:#1B1040; border:1px solid #D0C4E1; border-radius:7px; padding:7px 18px; font-size:13px;}"
+                              "QPushButton:hover{background:#EDE6F4;}")
+        btn.clicked.connect(lambda _=False, bb=b: pick(bb))
+        row.addWidget(btn)
+    lay.addLayout(row)
+    dlg.exec()
+    return result["v"]
+
+
+def print_pages(parent, n_pages, render_page, title="Digonto"):
+    """system print dialog -> render_page(index, painter, page_rect_in_device_pixels) for each chosen page"""
+    from PySide6.QtGui import QPainter
+    from PySide6.QtWidgets import QDialog, QMessageBox
+    from PySide6.QtPrintSupport import QAbstractPrintDialog, QPrintDialog, QPrinter
+    pr = QPrinter(QPrinter.HighResolution)
+    pr.setDocName(title)
+    dlg = QPrintDialog(pr, None)
+    dlg.setMinMax(1, max(1, n_pages))
+    if n_pages > 1:
+        dlg.setOption(QAbstractPrintDialog.PrintPageRange, True)
+    if dlg.exec() != QDialog.Accepted:
+        return False
+    first, last = 1, n_pages
+    if n_pages > 1 and pr.printRange() == QPrinter.PageRange and pr.fromPage() > 0:
+        first, last = pr.fromPage(), pr.toPage()
+    p = QPainter()
+    if not p.begin(pr):
+        QMessageBox.warning(parent, title, "The printer could not be started.")
+        return False
+    try:
+        for i in range(first - 1, last):
+            if i > first - 1:
+                pr.newPage()
+            render_page(i, p, pr.pageRect(QPrinter.DevicePixel))
+    finally:
+        p.end()
+    return True
+
+
+def fit_rect(w, h, rect):
+    """largest w:h rectangle centred in rect"""
+    from PySide6.QtCore import QRectF
+    s = min(rect.width() / max(w, 1e-9), rect.height() / max(h, 1e-9))
+    tw, th = w * s, h * s
+    return QRectF(rect.x() + (rect.width() - tw) / 2, rect.y() + (rect.height() - th) / 2, tw, th)
+
+
+def install_dialogs():
+    from PySide6.QtWidgets import QMessageBox as _MB
+    _MB.question = staticmethod(_styled_question)
+    _decouple_dialogs()
+
+
+_DG_LIVE = set()
+
+
+class _DgCentre(QObject):
+    """a popup that has a parent can be dragged together with it (seen on Mac and Linux). So popups are free windows, centred over the window they came from."""
+    def eventFilter(self, o, e):
+        if e.type() == QEvent.Show and not getattr(o, "_dg_done", False):
+            o._dg_done = True
+            par = getattr(o, "_dg_parent", None)
+            try:
+                if par is not None:
+                    top = par.window()
+                    g = top.frameGeometry()
+                    o.move(g.center().x() - o.width() // 2, g.center().y() - o.height() // 2)
+            except Exception:
+                pass
+        return False
+
+
+def _decouple_dialogs():
+    from PySide6.QtWidgets import QDialog as _D, QMessageBox as _M
+    if getattr(_D, "_dg_patched", False):
+        return
+
+    def wrap(cls):
+        orig = cls.__init__
+
+        def init(self, *a, **k):
+            par = k.pop("parent", None)
+            a = list(a)
+            for i, x in enumerate(a):
+                if isinstance(x, QWidget):
+                    par = x
+                    a[i] = None
+                    break
+            else:
+                if par is not None:
+                    k["parent"] = None
+            orig(self, *a, **k)
+            self._dg_parent = par
+            if par is not None:
+                self.setWindowModality(Qt.ApplicationModal)
+                self.setWindowFlag(Qt.WindowStaysOnTopHint, True)       # a free window must not slip behind the program
+                f = _DgCentre(self)
+                self.installEventFilter(f)
+                _DG_LIVE.add(self)
+                self.finished.connect(lambda *_: QTimer.singleShot(0, lambda: _DG_LIVE.discard(self)))
+        cls.__init__ = init
+    wrap(_D)
+    wrap(_M)
+    _D._dg_patched = True
+
+
+def install_about(icon=None):
+    from PySide6.QtWidgets import QMessageBox as _MB
+    _MB.about = staticmethod(lambda parent, title, text: about_dialog(parent, title, text, icon))
+
+
+def make_header(title, subtitle, icon, on_about, right_widget=None, slim=True):
+    """slim Digonto header: dark dusk gradient, this program's icon and name (View > Hide header removes it)"""
+    header = QWidget()
+    header.setObjectName("header")
+    header.setToolTip(subtitle)
+    if slim:
+        header.setFixedHeight(34)
+    header.setStyleSheet("#header { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+                         "stop:0 #1D1548, stop:0.55 #4A1F6E, stop:1 #8A2150); }")
+    hl = QHBoxLayout(header)
+    hl.setContentsMargins(10, 2, 10, 2) if slim else hl.setContentsMargins(14, 6, 14, 6)
+    hl.setSpacing(10 if slim else 12)
+    logo = QLabel()
+    logo.setPixmap(icon.pixmap(QSize(24, 24) if slim else QSize(44, 44)))
+    hl.addWidget(logo)
+    t = QLabel(f"<span style='font-size:14px; font-weight:800; color:white'>{title}</span>" if slim else
+               f"<span style='font-size:20px; font-weight:800; color:white'>{title}</span><br><span style='color:#E9D5EE'>{subtitle}</span>")
+    hl.addWidget(t)
+    hl.addStretch()
+    if right_widget is not None:
+        hl.addWidget(right_widget)
+    # About is in Help > About (same in every program)
+    if slim:
+        QTimer.singleShot(0, lambda: _header_toggle(header, on_about, title))
+    _keep_help(header, title, on_about)
+    return header
+
+
+from PySide6.QtWidgets import QMenu  # noqa: E402
+from PySide6.QtCore import QTimer  # noqa: E402
+
+
+def _header_toggle(header, on_about=None, title="", tries=0):
+    """View > Hide header (remembered)"""
+    from PySide6.QtCore import QSettings
+    from PySide6.QtGui import QAction
+    try:
+        win = header.window()
+    except RuntimeError:
+        return
+    mb = win.menuBar() if (win is not header and hasattr(win, "menuBar")) else None
+    if mb is None:
+        if tries < 60:                                   # the header is not in its window yet: try again shortly
+            QTimer.singleShot(100, lambda: _header_toggle(header, on_about, title, tries + 1))
+        return
+    if win.property("_hdr_toggle"):
+        return
+    win.setProperty("_hdr_toggle", True)
+    menu = _top_menus(mb).get("View")
+    if menu is None:
+        menu = QMenu("View", win)
+        win._digonto_view_menu = menu
+        help_act = next((a for a in mb.actions() if a.text().replace("&", "") == "Help"), None)
+        if help_act is not None:
+            mb.insertMenu(help_act, menu)
+        else:
+            mb.addMenu(menu)
+    else:
+        menu.addSeparator()
+    act = QAction("Hide header", win)
+    act.setCheckable(True)
+    st = QSettings("Digonto", "ui")
+    hidden = str(st.value("header_hidden", "false")).lower() == "true"
+    act.setChecked(hidden)
+    header.setVisible(not hidden)
+
+    def apply(on):
+        header.setVisible(not on)
+        st.setValue("header_hidden", "true" if on else "false")
+    act.toggled.connect(apply)
+    menu.addAction(act)
+
+
+def scrolled(widget):
+    """the content keeps its natural size; when the window is smaller, scroll bars appear instead of cut-off parts"""
+    from PySide6.QtWidgets import QFrame, QScrollArea
+    sa = QScrollArea()
+    sa.setWidgetResizable(True)
+    sa.setFrameShape(QFrame.NoFrame)
+    sa.setWidget(widget)
+    sa.setStyleSheet("QScrollArea{background:transparent;}")
+    return sa
+
+
+def wrap_with_header(window, header, body):
+    """central widget = header on top, body below (what Digonto PDF does)"""
+    central = QWidget()
+    cl = QVBoxLayout(central)
+    cl.setContentsMargins(0, 0, 0, 0)
+    cl.setSpacing(0)
+    cl.addWidget(header)
+    cl.addWidget(scrolled(body), 1)
+    window.setCentralWidget(central)
+
+
+def light_palette():
+    """fixed light colors, so a dark system theme cannot turn text white on our light panels"""
+    p = QPalette()
+    ink, soft = QColor("#1B1040"), QColor("#8A7FA6")
+    for role, col in ((QPalette.Window, "#F6F2FA"), (QPalette.WindowText, "#1B1040"), (QPalette.Base, "#FFFFFF"),
+                      (QPalette.AlternateBase, "#EDE6F4"), (QPalette.Text, "#1B1040"), (QPalette.Button, "#FFFFFF"),
+                      (QPalette.ButtonText, "#1B1040"), (QPalette.Highlight, "#C2395C"), (QPalette.HighlightedText, "#FFFFFF"),
+                      (QPalette.ToolTipBase, "#FFFFE8"), (QPalette.ToolTipText, "#1B1040"), (QPalette.Link, "#C2395C"),
+                      (QPalette.PlaceholderText, "#8A7FA6"), (QPalette.BrightText, "#FFFFFF")):
+        p.setColor(role, QColor(col))
+    for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
+        p.setColor(QPalette.Disabled, role, soft)
+    return p
+
+
+class _ComboFix(QObject):
+    """QSS drop-down lists need a styled delegate to paint their selected row properly"""
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Polish and isinstance(obj, QComboBox) and not obj.property("_fx"):
+            obj.setProperty("_fx", True)
+            obj.setItemDelegate(QStyledItemDelegate(obj))
+        return False
+
+
+def migrate_legacy():
+    """one-time, copy-only: bring settings and data from the old "Prottoy" names over to "Digonto" (nothing is deleted)"""
+    import shutil
+    try:
+        from PySide6.QtCore import QSettings, QStandardPaths
+        pairs = [("Prottoy", n) for n in ("Audio", "Images", "SSH", "Vector", "Write", "Sheets", "Studio", "QR",
+                                          "Logo", "Browser", "Tools", "Sublimation", "DTFRIP")]
+        pairs += [("ProttoyPDF", "ProttoyPDF")]
+        for org, app in pairs:
+            old = QSettings(org, app)
+            keys = old.allKeys()
+            if not keys:
+                continue
+            new = QSettings(org.replace("Prottoy", "Digonto"), app.replace("Prottoy", "Digonto"))
+            if new.allKeys():
+                continue
+            for k in keys:
+                new.setValue(k, old.value(k))
+            new.sync()
+        home = os.path.expanduser("~")
+        roots = [home]
+        for loc in (QStandardPaths.GenericDataLocation, QStandardPaths.GenericConfigLocation):
+            roots.append(QStandardPaths.writableLocation(loc))
+        roots.append(os.path.join(home, "Library", "Application Support"))
+        for root in roots:
+            if not root or not os.path.isdir(root):
+                continue
+            for entry in os.listdir(root):
+                if "prottoy" in entry.lower():
+                    src = os.path.join(root, entry)
+                    dst = os.path.join(root, entry.replace("Prottoy", "Digonto").replace("prottoy", "digonto").replace("PROTTOY", "DIGONTO"))
+                    if os.path.isdir(src) and not os.path.exists(dst):
+                        shutil.copytree(src, dst)
+    except Exception:
+        pass
+
+
+def setup_app(app, name, slug, icon):
+    migrate_legacy()
+    app.setApplicationName(name)
+    app.setApplicationDisplayName(name)
+    app.setDesktopFileName(slug)
+    app.setStyle("Fusion")
+    app.setPalette(light_palette())
+    app._combofix = _ComboFix(app)
+    app.installEventFilter(app._combofix)
+    app.setWindowIcon(icon)
+    install_dialogs()
+    install_about(icon)                       # one About window for every Digonto program
+    from PySide6.QtCore import QTimer
+    def _bye():                       # closing the last window ends the program for good (no Python left in the Dock)
+        import threading
+        t = threading.Timer(0.25, lambda: os._exit(0))      # a thread, so it works even if the Qt loop is stuck
+        t.daemon = True
+        t.start()
+    app.lastWindowClosed.connect(_bye)
+    app.aboutToQuit.connect(_bye)
+    app.setQuitOnLastWindowClosed(True)
+    state = {"seen": False, "gone": 0}
+
+    def _watch():                     # safety net (macOS): no visible window for 3 seconds = the program is over, end the process
+        if any(w.isVisible() for w in app.topLevelWidgets()):
+            state["seen"], state["gone"] = True, 0
+        elif state["seen"]:
+            state["gone"] += 1
+            if state["gone"] >= 3:
+                os._exit(0)
+    wd = QTimer(app)
+    wd.setInterval(1000)
+    wd.timeout.connect(_watch)
+    wd.start()
+
+
+def fit_window(window, w=1200, h=860):
+    """open at a size that suits the screen (never bigger than 92 % of it)"""
+    scr = window.screen().availableGeometry() if window.screen() else None
+    if scr:
+        w, h = min(w, int(scr.width() * 0.92)), min(h, int(scr.height() * 0.92))
+        window.resize(w, h)
+        window.move(scr.x() + (scr.width() - w) // 2, scr.y() + (scr.height() - h) // 2)
+    else:
+        window.resize(w, h)
+
+
+def mac_app_name(name):
+    """macOS: show the program's own name in the menu bar (and the app menu) instead of "Python". Call before QApplication(...).
+    Does nothing on Linux / Windows."""
+    import sys
+    if sys.platform != "darwin":
+        return
+    try:
+        import ctypes
+        import ctypes.util
+        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.objc_getClass.argtypes = [ctypes.c_char_p]
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+        msg = objc.objc_msgSend
+        msg.restype = ctypes.c_void_p
+
+        def send(obj, sel, *args):
+            msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p] + [ctypes.c_void_p] * len(args)
+            return msg(obj, objc.sel_registerName(sel.encode()), *args)
+
+        def nsstr(s):
+            msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p]
+            return msg(objc.objc_getClass(b"NSString"), objc.sel_registerName(b"stringWithUTF8String:"), s.encode("utf-8"))
+
+        bundle = send(objc.objc_getClass(b"NSBundle"), "mainBundle")
+        info = send(bundle, "infoDictionary")
+        if info:
+            for key in ("CFBundleName", "CFBundleDisplayName"):
+                send(info, "setObject:forKey:", nsstr(name), nsstr(key))
+        send(send(objc.objc_getClass(b"NSProcessInfo"), "processInfo"), "setProcessName:", nsstr(name))
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Adaptive option bar + Photoshop-style panel column (shared by Digonto Images and Digonto Vector)
+from PySide6.QtCore import QPoint, QRect, QSettings
+from PySide6.QtWidgets import QFrame, QLayout, QScrollArea, QSizePolicy, QToolButton
+
+
+class FlowLayout(QLayout):
+    """widgets run left to right and wrap onto the next row when the window is narrow"""
+
+    def __init__(self, parent=None, margin=6, hspace=10, vspace=4):
+        super().__init__(parent)
+        self._items = []
+        self._h, self._v = hspace, vspace
+        self.setContentsMargins(margin, margin // 2 + 1, margin, margin // 2 + 1)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def insertWidget(self, index, w):
+        self.addChildWidget(w)
+        from PySide6.QtWidgets import QWidgetItem
+        self._items.insert(index, QWidgetItem(w))
+        self.invalidate()
+
+    def addStretch(self, *_):
+        pass
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, w):
+        return self._do(QRect(0, 0, w, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        s = QSize()
+        for it in self._items:
+            if it.widget() is not None and it.widget().isHidden():
+                continue
+            s = s.expandedTo(it.minimumSize())
+        m = self.contentsMargins()
+        return s + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _do(self, rect, test):
+        m = self.contentsMargins()
+        x0, y = rect.x() + m.left(), rect.y() + m.top()
+        right = rect.right() - m.right()
+        x, row_h = x0, 0
+        for it in self._items:
+            w = it.widget()
+            if w is not None and w.isHidden():
+                continue
+            sz = it.sizeHint()
+            if x > x0 and x + sz.width() > right:
+                x = x0
+                y += row_h + self._v
+                row_h = 0
+            if not test:
+                it.setGeometry(QRect(QPoint(x, y), sz))
+            x += sz.width() + self._h
+            row_h = max(row_h, sz.height())
+        return y + row_h + m.bottom() - rect.y()
+
+
+class PanelBlock(QFrame):
+    """one panel: a header with a collapse arrow on the right (drag the header to move the panel), and the content below"""
+
+    def __init__(self, stack, title, widget):
+        super().__init__()
+        self.stack, self.title, self.body = stack, title, widget
+        self.setObjectName("pblock")
+        self.setStyleSheet("#pblock{border:1px solid #CEC8D3; border-radius:5px; background:#FFFFFF;}")
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+        self.head = QWidget()
+        self.head.setObjectName("phead")
+        self.head.setStyleSheet("#phead{background:#E7E2EB; border-top-left-radius:5px; border-top-right-radius:5px;}")
+        self.head.setCursor(Qt.OpenHandCursor)
+        hl = QHBoxLayout(self.head)
+        hl.setContentsMargins(8, 2, 4, 2)
+        lb = QLabel(title)
+        lb.setStyleSheet("color:#C2395C; font-weight:bold; background:transparent;")
+        lb.setAttribute(Qt.WA_TransparentForMouseEvents)
+        hl.addWidget(lb, 1)
+        self.arrow = QToolButton()
+        self.arrow.setAutoRaise(True)
+        self.arrow.setFocusPolicy(Qt.NoFocus)
+        self.arrow.setToolTip("Collapse / expand")
+        self.arrow.setFixedSize(28, 26)
+        self.arrow.setStyleSheet("QToolButton{color:#C2395C; font-size:20px; font-weight:bold; border:none; background:transparent;}"
+                                 "QToolButton:hover{background:#D8CDE0; border-radius:4px;}")
+        self.arrow.clicked.connect(lambda: self.set_collapsed(not self.collapsed))
+        hl.addWidget(self.arrow)
+        v.addWidget(self.head)
+        v.addWidget(widget)
+        self.collapsed = False
+        self._press = None
+        self._drag = False
+        self.head.installEventFilter(self)          # drag the header up / down to move the panel
+        self._arrow_icon()
+
+    def eventFilter(self, obj, e):
+        if obj is self.head:
+            t = e.type()
+            if t == QEvent.MouseButtonPress:
+                self._hp(e)
+                return True
+            if t == QEvent.MouseMove:
+                self._hm(e)
+                return True
+            if t == QEvent.MouseButtonRelease:
+                self._hr(e)
+                return True
+            if t == QEvent.MouseButtonDblClick:
+                self.set_collapsed(not self.collapsed)
+                return True
+        return False
+
+    def _arrow_icon(self):
+        self.arrow.setText("▸" if self.collapsed else "▾")
+
+    def set_collapsed(self, on, save=True):
+        self.collapsed = on
+        self.body.setVisible(not on)
+        self._arrow_icon()
+        if save:
+            self.stack.save()
+
+    def _hp(self, e):
+        if e.button() == Qt.LeftButton:
+            self._press = e.globalPosition().toPoint()
+            self._drag = False
+
+    def _hm(self, e):
+        if self._press is None:
+            return
+        g = e.globalPosition().toPoint()
+        if not self._drag and abs(g.y() - self._press.y()) > 6:
+            self._drag = True
+            self.head.setCursor(Qt.ClosedHandCursor)
+            self.setStyleSheet("#pblock{border:2px solid #C2395C; border-radius:5px; background:#FFFFFF;}")
+        if self._drag:
+            self.stack.move_block(self, self.stack.mapFromGlobal(g).y())
+
+    def _hr(self, e):
+        if self._drag:
+            self.setStyleSheet("#pblock{border:1px solid #CEC8D3; border-radius:5px; background:#FFFFFF;}")
+            self.head.setCursor(Qt.OpenHandCursor)
+            self.stack.save()
+        self._press = None
+        self._drag = False
+
+
+class PanelStack(QWidget):
+    """the column of panels; order and collapsed state are remembered"""
+
+    def __init__(self, org, app):
+        super().__init__()
+        self.settings = (org, app)
+        self.lay = QVBoxLayout(self)
+        self.lay.setContentsMargins(4, 4, 4, 4)
+        self.lay.setSpacing(6)
+        self.lay.addStretch(1)
+        self.blocks = {}
+
+    def add(self, title, widget):
+        b = PanelBlock(self, title, widget)
+        self.blocks[title] = b
+        self.lay.insertWidget(self.lay.count() - 1, b)
+        return b
+
+    def order(self):
+        out = []
+        for i in range(self.lay.count()):
+            w = self.lay.itemAt(i).widget()
+            if isinstance(w, PanelBlock):
+                out.append(w.title)
+        return out
+
+    def move_block(self, block, y):
+        others = [self.lay.itemAt(i).widget() for i in range(self.lay.count())]
+        others = [w for w in others if isinstance(w, PanelBlock) and w is not block and w.isVisible()]
+        idx = 0
+        for w in others:
+            if y > w.geometry().center().y():
+                idx += 1
+        target = [w for w in [self.lay.itemAt(i).widget() for i in range(self.lay.count())] if isinstance(w, PanelBlock)]
+        cur = target.index(block)
+        want = target.index(others[idx]) if idx < len(others) else len(target)
+        if want > cur:
+            want -= 1
+        if want != cur:
+            self.lay.removeWidget(block)
+            self.lay.insertWidget(want, block)
+
+    def save(self):
+        s = QSettings(*self.settings)
+        s.setValue("panels_order", ",".join(self.order()))
+        s.setValue("panels_collapsed", ",".join(t for t, b in self.blocks.items() if b.collapsed))
+
+    def restore(self):
+        s = QSettings(*self.settings)
+        saved = [t for t in str(s.value("panels_order", "")).split(",") if t in self.blocks]
+        for i, t in enumerate(saved):
+            b = self.blocks[t]
+            self.lay.removeWidget(b)
+            self.lay.insertWidget(i, b)
+        for t in str(s.value("panels_collapsed", "")).split(","):
+            if t in self.blocks:
+                self.blocks[t].set_collapsed(True, save=False)
+
+
+class ScrollColumn(QScrollArea):
+    """vertical scroll bar only when it is needed (no arrow buttons)"""
+
+    def __init__(self, inner):
+        super().__init__()
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setWidget(inner)
+        self.setFixedWidth(250)
+
+
+def dock_width_for(window_width, content_min=0):
+    """side panels: always the same fixed width in every Digonto program"""
+    return 250
+
+
+class _Stabilizer(QObject):
+    """keeps an options bar at one fixed height: the tallest the bar can get for any tool at the current width,
+    so the picture area below never jumps when you change tools"""
+
+    def __init__(self, bar, lay, variants, apply, get):
+        super().__init__(bar)
+        self.bar, self.lay, self.variants, self.apply, self.get = bar, lay, list(variants), apply, get
+        self.busy, self.last_w = False, -1
+        bar.installEventFilter(self)
+        QTimer.singleShot(0, self.update)
+
+    def eventFilter(self, o, e):
+        if e.type() == QEvent.Resize and not self.busy and o.width() != self.last_w:
+            QTimer.singleShot(0, self.update)
+        return False
+
+    def update(self):
+        w = self.bar.width()
+        if self.busy or w <= 0:
+            return
+        self.busy, self.last_w = True, w
+        saved = self.get()
+        best = 0
+        for v in self.variants:
+            self.apply(v)
+            best = max(best, self.lay.heightForWidth(w))
+        self.apply(saved)
+        self.bar.setFixedHeight(max(best, 34))
+        self.busy = False
+
+
+def stabilize_bar(bar, lay, variants, apply, get):
+    return _Stabilizer(bar, lay, variants, apply, get)
+
+
+def shrinkable(root):
+    """panels must fit the fixed 250 px column: buttons share the row equally, drop-downs may be narrower"""
+    from PySide6.QtWidgets import QComboBox, QPushButton, QSizePolicy
+    for b in root.findChildren(QPushButton):
+        p = b.sizePolicy()
+        p.setHorizontalPolicy(QSizePolicy.Ignored)
+        b.setSizePolicy(p)
+        if b.text():
+            b.setMinimumWidth(min(80, b.fontMetrics().horizontalAdvance(b.text()) + 16))
+    for c in root.findChildren(QComboBox):
+        c.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        c.setMinimumContentsLength(6)
+
+
+# ---- one running copy per program: opening another file hands it to the copy that is already open (new tab / window)
+_SI_KEEP = []
+
+
+def _si_name(slug):
+    import getpass
+    try:
+        u = getpass.getuser()
+    except Exception:
+        u = "user"
+    return "digonto-" + slug + "-" + "".join(c if c.isalnum() else "_" for c in u)
+
+
+def forward_to_running(slug, files):
+    """True = the files were sent to a copy of this program that is already open (the caller then just exits)"""
+    files = [os.path.abspath(f) for f in files if os.path.isfile(f)]
+    if not files:
+        return False
+    from PySide6.QtNetwork import QLocalSocket
+    s = QLocalSocket()
+    s.connectToServer(_si_name(slug))
+    if not s.waitForConnected(400):
+        return False
+    s.write(json.dumps(files).encode("utf-8"))
+    ok = s.waitForBytesWritten(1500)
+    s.waitForReadyRead(1500)              # the other side answers "ok" once it has the window up
+    s.disconnectFromServer()
+    return bool(ok)
+
+
+def serve_single(slug, window, opener):
+    """this copy becomes the one that other launches hand their files to; opener(path) opens one file"""
+    from PySide6.QtNetwork import QLocalServer
+    name = _si_name(slug)
+    QLocalServer.removeServer(name)
+    srv = QLocalServer(window)
+    if not srv.listen(name):
+        return
+    _SI_KEEP.append(srv)
+
+    def got():
+        while srv.hasPendingConnections():
+            c = srv.nextPendingConnection()
+            c.waitForReadyRead(800)
+            try:
+                paths = json.loads(bytes(c.readAll()).decode("utf-8"))
+            except Exception:
+                paths = []
+            target = None
+            for p in paths:
+                try:
+                    if os.path.isfile(p):
+                        r = opener(p)
+                        if r is not None:
+                            target = r
+                except Exception:
+                    pass
+            try:
+                w = target or window
+                if w.isMinimized():
+                    w.showNormal()
+                w.show()
+                w.raise_()
+                w.activateWindow()
+            except Exception:
+                pass
+            c.write(b"ok")
+            c.flush()
+            c.waitForBytesWritten(500)
+            c.disconnectFromServer()
+    srv.newConnection.connect(got)
+
+
+# ---- Help menu in every program: Quick help, All shortcuts, About (same look as About)
+_HELP_QUICK = {
+    # program: (what it is, [what you can do], [how to do it])
+    "pdf": ("Open, edit and create PDF files. Every PDF opens in its own tab; the first tab, Start, shows your recent files.",
+            ["Change or add text right on the page", "Insert, move, rotate, delete and extract pages",
+             "Sign with your own signature", "Make a PDF smaller (Shrink)", "Join several files into one PDF",
+             "Put both sides of an ID card on one page", "Print"],
+            ["Pick a tool on the right (Pages, Sign, Edit text, Shrink, Add files, More); its actions appear above the page.",
+             "Edit text: click a line to change it, or choose Add text and click on the page. Double-click any text to edit it again.",
+             "Pages: select pages in the list on the left, then insert, move, rotate, delete or extract them.",
+             "Sign: draw or load your signature, place it, move and resize it, then press Apply. It is remembered for next time.",
+             "Shrink makes a smaller copy in a new tab; the original stays as it is.",
+             "File > Close project closes the current PDF; the program asks before closing unsaved changes."]),
+    "images": ("Photo editing with layers, like Photoshop or GIMP, made easy.",
+               ["Paint, erase, clone and heal", "Select parts of a picture (box, lasso, magic wand, quick selection)",
+                "Work with layers, masks, blend modes and text layers", "Adjust colour, light and contrast; use filters",
+                "Crop, resize and transform", "Open and save Photoshop files (.psd) with layers, masks and editable text"],
+               ["Tools are in the column on the left; hover over a tool to see its key. Tool options appear above the picture.",
+                "When there is a selection, everything happens only inside it. Ctrl+D removes the selection.",
+                "Layers panel: show or hide, opacity, blend mode, lock, add, duplicate, reorder, merge. Double-click a layer to rename it.",
+                "Masks: Layers panel > Mask. Paint black to hide, white to show.",
+                "Text: choose the Text tool and click on the picture. Double-click a text layer to change it later.",
+                "File > Save project keeps everything (.dimg). Save as .psd for Photoshop and GIMP. File > Export makes PNG, JPG and WebP."]),
+    "vector": ("Draw logos, shapes and illustrations, like Illustrator, CorelDRAW or Inkscape, made easy.",
+               ["Draw rectangles, ellipses, polygons, stars, lines and free curves", "Edit shapes point by point (nodes)",
+                "Combine shapes: weld, trim, intersect", "Fill with colours and gradients; set outlines",
+                "Write text and turn it into curves", "Work with layers and groups",
+                "Open SVG, AI, EPS and PDF; export SVG, EPS, AI, PDF and PNG"],
+               ["Left-click a colour at the bottom for the fill, right-click it for the outline.",
+                "Double-click a shape to edit its nodes. In node mode, double-click a line to add a node.",
+                "Drag from a ruler to pull out a guide; objects snap to guides, to other objects and to the page.",
+                "Shaping (Weld, Trim, Intersect ...) makes new shapes from shapes that overlap.",
+                "Hold Space and drag to move the view; the mouse wheel zooms.",
+                "For Inkscape and Illustrator use File > Export > SVG: layers, groups and text stay editable."]),
+    "sheets": ("A spreadsheet like Excel: formulas, charts, XLSX and CSV.",
+               ["Type numbers and text into cells", "Calculate with formulas and functions", "Sort, filter and check data",
+                "Format numbers, fonts, colours and borders", "Make charts", "Open and save XLSX, CSV and TSV; export PDF"],
+               ["Type to replace a cell, or press F2 to change it. Enter or Tab confirms.",
+                "Start a formula with = and click cells to add them. Insert > Function list shows every function with an example.",
+                "Drag the small square at the corner of a selection to fill cells or continue a series.",
+                "Data menu: sort, filter and data validation. Format menu: number formats, fonts, borders, merge and conditional colours.",
+                "Ctrl+W returns to the start screen; the program asks before closing unsaved changes."]),
+    "write": ("A word processor like Word: letters, reports and documents.",
+              ["Write and format text with styles, fonts and colours", "Lists, tables, pictures and links",
+               "Page setup: paper, margins, header, footer and page numbers", "Spell check (English)",
+               "Open and save DOCX, ODT, HTML, Markdown and text; save as PDF; print"],
+              ["Choose a style (Title, Heading, Quote, Code) in the toolbar, then set font, size and colour.",
+               "Lists: Tab and Shift+Tab change the level. Tables, pictures and links are in the Insert menu.",
+               "A red wavy line marks a spelling mistake: right-click it for suggestions. F7 goes to the next one.",
+               "File > Page setup sets paper, margins, header, footer and page numbers; PDF and print use them.",
+               "Ctrl+W returns to the start screen; the program asks before closing unsaved changes."]),
+    "audio": ("Record, edit and clean up sound, like Adobe Audition, made easy.",
+              ["Record from a microphone", "Cut, copy, paste and delete parts of a sound",
+               "Make quiet sound louder; fade in and out", "Remove background noise",
+               "Equalizer and many effects, each with Preview", "Split voice and music",
+               "Export WAV, MP3, FLAC, OGG, M4A and more"],
+              ["Drag on the wave to select. Double-click selects everything; Shift+click makes the selection longer.",
+               "Edit > Cut by time: type exact times like 0:12.345 and cut that piece.",
+               "Effects work on the selection, or on everything when nothing is selected. Press Preview before Apply.",
+               "Quiet sound: Effects > Volume > Make quiet audio louder.",
+               "Background noise: select a part with only noise, Effects > Learn noise, then Remove background noise.",
+               "Ctrl+S saves a project (.daud, nothing lost). Ctrl+E exports a sound file."]),
+    "logo": ("Make a complete logo and brand in four steps.",
+             ["Get dozens of logo ideas from a few words", "Change name, symbol, layout, colours and fonts",
+              "Export a full brand kit: logo files (SVG, PNG, PDF, EPS, AI), favicon, app icons, social images and a brand guide"],
+             ["1 Brief: type the business name, a tagline, what you do, then pick styles and colours.",
+              "2 Ideas: press the heart to keep an idea, More for other versions of it, More ideas for a new set.",
+              "3 Customize: change anything; Undo and Redo work as usual.",
+              "4 Export: choose a folder; everything is made at once.",
+              "File > Save project keeps your work as a .dlgo file."]),
+    "qr": ("Make QR codes for a link, text, Wi-Fi, contact card, e-mail, phone, SMS, WhatsApp or a map location.",
+           ["Style the dots and corner eyes", "One colour or a gradient", "Put a logo in the middle",
+            "Add a frame with a text label", "Export PNG (any size), SVG or PDF", "Make many codes at once from a list"],
+           ["Choose the type on the left and fill in the data; the code changes while you type.",
+            "Set the style on the right: dots, corner eyes, colours, logo, frame and label.",
+            "Export with the PNG, SVG or PDF buttons. Many codes from a list makes a whole folder at once.",
+            "File > Save project keeps everything as a .dqr file you can open again.",
+            "Always test a code with your phone before printing. A dark code on a light background scans best."]),
+    "ssh": ("An SSH terminal and SFTP file manager. Your servers are the same on every computer.",
+            ["Keep a list of your servers in an encrypted vault", "Open servers as terminal tabs",
+             "Copy files with SFTP", "Choose terminal colours and fonts"],
+            ["Sign in with the same e-mail, vault password and location on each computer to see the same servers.",
+             "Add a server once, then open it as a terminal tab; use the file view to copy files.",
+             "A copy of the vault stays on each computer, so the program also works while the VPN is down.",
+             "Settings: terminal colours, font and font size."]),
+    "dtfrip": ("Print DTF transfers with an Epson L800 / L805 DTF printer.",
+               ["Lay out pictures on the film", "Colour and white in one print run", "Quality presets from Draft to Maximum",
+                "Nozzle check, head cleaning and test prints"],
+               ["First time: add your printer's own colour profile (.icc / .icm) in Settings > Add profile - profiles are not included.",
+                "Add pictures (PNG, TIFF, JPG, PDF, SVG) or drop them on the window, then set the width and copies.",
+                "Use PNG with a transparent background: white ink is printed only under the picture.",
+                "Layout, Printer, Color and White tabs on the right set the sheet, quality, colour and white ink.",
+                "Load the DTF film (print side up) in the rear tray, then press Print.",
+                "Printer / driver setup help is in the File menu."]),
+    "sublimation": ("Print on sublimation transfer paper with any 4-ink Epson printer.",
+                    ["Lay out pictures on the page", "Mirror for transfer paper", "Colour profiles and colour amount",
+                     "Save a print-ready PNG or PDF"],
+                    ["Install the Epson driver for your printer once (File > Printer / driver setup help).",
+                     "Add your printer's own colour profile (.icc / .icm) in Settings > Add profile - profiles are not included.",
+                     "Add pictures, set the paper size, then press Print. The driver dialog opens.",
+                     "In the driver dialog: colour management off, best quality, the sublimation paper type, scale 100 %.",
+                     "You can also save a print-ready PNG or PDF and print it from any program."]),
+    "player": ("Play video and music. Open files or a folder, or drop them on the window.",
+               ["Play lists with shuffle and repeat", "Full screen", "Speed from 0.5x to 2x",
+                "Choose audio tracks and subtitles inside the file", "Continue long films where you stopped",
+                "Save a picture of the moment you see"],
+               ["Space plays or pauses; a click on the picture does the same. Double-click goes full screen; Esc leaves.",
+                "The play list is on the right. Double-click to play, drag to change the order. File > Save play list makes an .m3u file.",
+                "Shuffle and repeat (off / all / one) are next to the play buttons.",
+                "Audio > Audio track and Subtitles show the tracks inside the file."]),
+    "studio": ("All your Digonto programs in one place.",
+               ["Open any Digonto program", "Open a file in the right program", "See your recent files",
+                "Install, update or remove programs"],
+               ["Click a tile to open that program in its own window.",
+                "Open file picks the right program by the file type. Recent files are on the right.",
+                "Exit closes only Studio; open programs keep running.",
+                "The Uninstall button on a tile removes one program. Your own files are never touched."]),
+    "tools": ("Screenshots, phone screenshots, cropping, template matching and background removal.",
+              ["Capture the screen, an area or one window", "Take screenshots from a phone (ADB)",
+               "Crop templates and find tap coordinates", "Check if a template is found in a screenshot",
+               "Remove a background (automatic, by clicking, or with AI)"],
+              ["Choose a tool in the column on the left; its settings are in the panels on the right.",
+               "Several pictures can be open as tabs; drop files on the window to open them. The mouse wheel zooms.",
+               "Crop: drag a box to save a template, click the tap point to get offset_x / offset_y.",
+               "Remove background keeps the original pixels exactly; only the background becomes transparent.",
+               "Setup shows what is installed and can install what is missing."]),
+}
+
+_HELP_MORE = {
+    # an extra section in Quick tips: working together with other programs
+    "images": ("Working with Photoshop and GIMP", [
+        "Use .psd to share pictures with Photoshop and GIMP: File > Export and choose Photoshop PSD. File > Open opens .psd files.",
+        "Layers keep their names, order, opacity, blend mode and visibility. Groups stay groups.",
+        "Masks are saved as real layer masks, so you can keep editing them there.",
+        "Text layers are saved as real Photoshop text: you can change the words, font, size and colour in Photoshop. "
+        "GIMP shows them as normal picture layers.",
+        "Layer styles (shadow, outline ...) are merged into the layer picture. Adjustment layers are not saved.",
+        "Opening a .psd from Photoshop: layers, masks and text come in editable. A font you do not have is replaced by the closest one.",
+        "Keep working in .dimg (File > Save project): it keeps everything. Use .psd to exchange files."]),
+    "vector": ("Working with Inkscape and Illustrator", [
+        "Use SVG to share drawings with Inkscape and Illustrator: File > Export > SVG, and File > Open for SVG files from them.",
+        "Layers keep their names, and hidden or locked layers stay hidden or locked. Groups and object names are kept.",
+        "Text stays editable text with its font, size, bold, italic and colour.",
+        "Shapes, colours, gradients and outlines stay editable in both directions.",
+        "AI, EPS and PDF files can be opened too, but only the shapes come in: no layers, no editable text, no pictures.",
+        "Keep working in .dvec (File > Save): it keeps everything. Use SVG to exchange files."]),
+}
+
+
+_HELP_EXTRA = {
+    "images": [("Tools", [("V", "Move"), ("Ctrl+T", "Free transform"), ("A", "Quick selection"), ("M", "Select"), ("L", "Lasso"), ("W", "Wand"),
+                          ("B", "Brush"), ("E", "Eraser"), ("S", "Clone stamp"), ("J", "Healing brush"), ("R", "Smudge"), ("O", "Dodge"),
+                          ("K", "Fill"), ("G", "Gradient"), ("I", "Picker"), ("T", "Text"), ("U", "Shape"), ("C", "Crop"), ("H", "Hand"), ("Z", "Zoom")]),
+               ("Painting and selecting", [("[  ]", "Brush size"), ("X", "Swap colours"), ("D", "Black and white"),
+                                           ("Shift + select", "Add to selection"), ("Alt + select", "Subtract from selection"),
+                                           ("Alt + click", "Clone / healing: choose the part to copy")]),
+               ("View", [("Mouse wheel", "Zoom"), ("Space + drag", "Move around")])],
+    "vector": [("Tools", [("V", "Select"), ("A", "Node edit"), ("P", "Pen"), ("R", "Rectangle"), ("E", "Ellipse"), ("G", "Polygon"), ("S", "Star"),
+                          ("L", "Line"), ("B", "Freehand"), ("T", "Text"), ("I", "Eyedropper"), ("Z", "Zoom"), ("H or Space", "Pan")]),
+               ("Mouse", [("Left-click colour", "Fill"), ("Right-click colour", "Outline"), ("Drag from ruler", "Pull out a guide"),
+                          ("Wheel", "Zoom"), ("Shift + wheel", "Scroll sideways"), ("Double-click shape", "Edit nodes")])],
+    "sheets": [("Move", [("Arrows", "Move"), ("Ctrl + arrows", "To the edge of data"), ("Home / Ctrl+Home / Ctrl+End", "Start of row / sheet / end of data"), ("PgUp / PgDn", "One screen")]),
+               ("Select", [("Shift + arrows", "Extend"), ("Ctrl+Space", "Column"), ("Shift+Space", "Row"), ("Ctrl + click", "Add a cell")]),
+               ("Edit", [("F2", "Edit cell"), ("Enter / Tab", "Confirm and move"), ("Esc", "Cancel"), ("Alt+Enter", "New line in cell")]),
+               ("Formulas", [("=", "Start a formula; click cells to add references"), ("F4", "Toggle $"), ("Tab", "Accept function suggestion"), ("Alt+=", "AutoSum")]),
+               ("Copy and fill", [("Ctrl+Shift+V", "Paste values only"), ("Ctrl+D", "Fill down"), ("Ctrl+R", "Fill right")]),
+               ("Other", [("Ctrl+G", "Go to"), ("Ctrl+;", "Today's date"), ("Ctrl + wheel", "Zoom")])],
+    "write": [("Writing", [("Tab / Shift+Tab", "List level"), ("F7", "Next spelling mistake")])],
+    "player": [("Mouse", [("Click", "Play / pause"), ("Double-click", "Full screen"), ("Wheel", "Volume")])],
+    "audio": [("Playing and cursor", [("Space", "Play / pause"), ("Left / Right", "Move cursor 10 ms"), ("Alt + arrows", "1 ms"), ("Ctrl + arrows", "1 s"), ("Shift + arrows", "Extend selection")]),
+              ("Mouse", [("Drag", "Select"), ("Double-click", "Select everything"), ("Wheel", "Zoom"), ("Shift + wheel", "Scroll"), ("Right-drag", "Move the view")])],
+    "pdf": [("Mouse", [("Click on text", "Edit that line"), ("Double-click text", "Edit text again"), ("Wheel", "Scroll pages"), ("Ctrl + wheel", "Zoom")])],
+}
+
+
+def _help_key(name):
+    n = (name or "").lower()
+    for k in _HELP_QUICK:
+        if k in n:
+            return k
+    return ""
+
+
+def _mac_keys(text):
+    """on a Mac: Ctrl+Shift+S -> ⌘+⇧+S (Qt's Ctrl is the Command key there); the + stays, like on Linux and Windows"""
+    import re
+    if sys.platform != "darwin":
+        return text
+    for a, b in (("Ctrl", "\u2318"), ("Cmd", "\u2318"), ("Meta", "\u2303"), ("Alt", "\u2325"), ("Shift", "\u21e7")):
+        text = re.sub(r"\b" + a + r"\b", b, text)
+    return text
+
+
+def _nice_key(seq):
+    from PySide6.QtGui import QKeySequence
+    return _mac_keys(seq.toString(QKeySequence.PortableText))
+
+
+def collect_shortcuts(win):
+    """[(menu name, [(keys, what it does)])]  - read from the real menus, so it is always the truth"""
+    from PySide6.QtGui import QAction
+    seen, groups, used = set(), [], set()
+
+    def clean(t):
+        return t.replace("&", "").replace("…", "").replace("...", "").strip()
+
+    def walk(menu, out, depth=0):
+        try:
+            acts = list(menu.actions())
+        except RuntimeError:
+            return
+        for a in acts:
+            used.add(id(a))
+            try:
+                sub = a.menu()
+                if sub is not None:
+                    sub.actions()
+            except RuntimeError:
+                sub = None
+            if sub is not None:
+                if depth < 4:
+                    walk(sub, out, depth + 1)
+                continue
+            if a.isSeparator():
+                continue
+            keys = [_nice_key(s) for s in a.shortcuts() if not s.isEmpty()]
+            t = clean(a.text())
+            if keys and t and (t, keys[0]) not in seen:
+                seen.add((t, keys[0]))
+                out.append((" / ".join(keys), t))
+    mb = win.menuBar() if hasattr(win, "menuBar") else None
+    if mb is not None:
+        menus = _top_menus(mb)
+        for top in mb.actions():
+            m = menus.get(clean(top.text()))
+            if m is None:
+                continue
+            out = []
+            walk(m, out)
+            if out:
+                groups.append((clean(top.text()), out))
+    other = []
+    for a in win.findChildren(QAction):
+        if id(a) in used:
+            continue
+        keys = [_nice_key(s) for s in a.shortcuts() if not s.isEmpty()]
+        t = clean(a.text())
+        if keys and t and (t, keys[0]) not in seen:
+            seen.add((t, keys[0]))
+            other.append((" / ".join(keys), t))
+    if other:
+        groups.append(("Other", other))
+    return groups
+
+
+def _help_window(parent, title, subtitle, html, buttons):
+    """popup with the Digonto header (same look as About); buttons = [(label, callback or None)]"""
+    from PySide6.QtWidgets import QDialog, QTextBrowser
+    dlg = QDialog(parent)
+    dlg.setWindowTitle(title)
+    dlg.setStyleSheet("QDialog { background:#F6F2FA; } QLabel { color:#1B1040; }")
+    lay = QVBoxLayout(dlg)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(0)
+    head = QWidget()
+    head.setObjectName("abouthead")
+    head.setStyleSheet("#abouthead { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1D1548, stop:0.55 #4A1F6E, stop:1 #8A2150); }")
+    hl = QHBoxLayout(head)
+    hl.setContentsMargins(18, 14, 26, 14)
+    hl.setSpacing(14)
+    bp = _banner_pixmap(58)
+    if bp is not None:
+        b = QLabel()
+        b.setPixmap(bp)
+        hl.addWidget(b)
+        bar = QWidget()
+        bar.setFixedSize(2, 52)
+        bar.setStyleSheet("background:rgba(255,255,255,0.25);")
+        hl.addWidget(bar)
+    t = QLabel(f"<span style='font-size:18px; font-weight:700; color:white'>{title}</span>"
+               f"<br><span style='font-size:13px; color:#E9D5EE'>{subtitle}</span>")
+    hl.addWidget(t)
+    hl.addStretch()
+    lay.addWidget(head)
+    tb = QTextBrowser()
+    tb.setFrameShape(tb.Shape.NoFrame)
+    tb.setOpenExternalLinks(False)
+    tb.setStyleSheet("QTextBrowser { background:#F6F2FA; color:#1B1040; font-size:13px; padding:8px 14px; }")
+    tb.setHtml(html)
+    lay.addWidget(tb, 1)
+    row = QHBoxLayout()
+    row.setContentsMargins(22, 8, 22, 16)
+    row.addStretch()
+    for label, cb in buttons:
+        btn = QPushButton(label)
+        btn.setCursor(Qt.PointingHandCursor)
+        primary = cb is None
+        if primary:
+            btn.setDefault(True)
+            btn.setStyleSheet("QPushButton{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #FF6F8E,stop:1 #FFB05A); color:#2A1241; "
+                              "border:1px solid #FF6F8E; border-radius:7px; padding:7px 22px; font-size:13px; font-weight:600;}")
+            btn.clicked.connect(dlg.accept)
+        else:
+            btn.setStyleSheet("QPushButton{background:white; color:#1B1040; border:1px solid #D0C4E1; border-radius:7px; padding:7px 18px; font-size:13px;}"
+                              "QPushButton:hover{background:#EDE6F4;}")
+            btn.clicked.connect(lambda _=False, cb=cb: (dlg.accept(), QTimer.singleShot(0, cb)))
+        row.addWidget(btn)
+    lay.addLayout(row)
+    dlg.setFixedSize(*POPUP_SIZE)
+    return dlg
+
+
+_HELP_CSS = ("<style>h3{color:#8A2150; margin:14px 0 4px 0; font-size:14px;} p{margin:4px 0;} li{margin:3px 0;} "
+             "td{padding:3px 10px 3px 0; vertical-align:top;} td.k{font-weight:600; color:#4A1F6E; white-space:nowrap; padding-right:18px;}</style>")
+
+
+def _esc(s):
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def show_quick_help(win, name):
+    """Help > Quick tips: what the program is for, what you can do, how to do it"""
+    key = _help_key(name)
+    entry = _HELP_QUICK.get(key, ("", [], []))
+    intro, can, how = (entry[0], [], entry[1]) if len(entry) == 2 else entry
+    body = _HELP_CSS
+    if intro:
+        body += f"<p style='font-size:14px'>{_esc(intro)}</p>"
+    if can:
+        body += "<h3>What you can do</h3><ul>" + "".join(f"<li>{_esc(b)}</li>" for b in can) + "</ul>"
+    if how:
+        body += "<h3>How to do it</h3><ul>" + "".join(f"<li>{_esc(b)}</li>" for b in how) + "</ul>"
+    more = _HELP_MORE.get(key)
+    if more:
+        body += f"<h3>{_esc(more[0])}</h3><ul>" + "".join(f"<li>{_esc(b)}</li>" for b in more[1]) + "</ul>"
+    dlg = _help_window(win, "Quick tips", name, body, [("Shortcuts", lambda: show_all_shortcuts(win, name)), ("Close", None)])
+    dlg.exec()
+
+
+def show_all_shortcuts(win, name):
+    """Help > Shortcuts: every key of the program, read from its real menus"""
+    groups = [(g, its) for g, its in collect_shortcuts(win) if g.lower() != "help"]
+    extra = _HELP_EXTRA.get(_help_key(name), [])
+    body = _HELP_CSS + "<p>Every keyboard shortcut of this program, as it works on your computer.</p>"
+    have = {k.lower() for _g, its in groups for k, _t in its}
+    extra = [(g, [(_mac_keys(k), t) for k, t in its if _mac_keys(k).lower() not in have]) for g, its in extra]
+    for g, items in groups + [(g, its) for g, its in extra if its]:
+        body += f"<h3>{_esc(g)}</h3><table>" + "".join(f"<tr><td class='k'>{_esc(k)}</td><td>{_esc(t)}</td></tr>" for k, t in items) + "</table>"
+    if not groups and not extra:
+        body += "<p>This program has no keyboard shortcuts.</p>"
+    dlg = _help_window(win, "Shortcuts", name, body, [("Close", None)])
+    dlg.exec()
+
+
+def _top_menus(mb):
+    """the menus of a menu bar as {name: QMenu}. Found through the window's children, not QAction.menu():
+    on some systems (Wayland, newer Python) that gives back a menu object that is already deleted"""
+    out = {}
+    try:
+        acts = list(mb.actions())
+    except RuntimeError:
+        return out
+    win = mb.window()
+    for m in win.findChildren(QMenu):
+        try:
+            act = m.menuAction()
+            if act in acts:
+                out.setdefault(m.title().replace("&", "").strip(), m)
+        except RuntimeError:
+            continue
+    return out
+
+
+def _remove_top(mb, name):
+    """take every top-level menu called name out of the menu bar (also ones whose object is gone)"""
+    for a in list(mb.actions()):
+        try:
+            if a.text().replace("&", "").strip() == name:
+                mb.removeAction(a)
+        except RuntimeError:
+            continue
+
+
+def install_help_menu(win, title, on_about):
+    """Help > Quick tips, Shortcuts, About - exactly the same in every Digonto program"""
+    from PySide6.QtGui import QAction
+    mb = win.menuBar() if hasattr(win, "menuBar") else None
+    if mb is None:
+        return False
+    name = QApplication.applicationDisplayName()
+    if not _help_key(name):
+        name = title
+    menus = _top_menus(mb)
+    mine = getattr(win, "_digonto_help_menu", None)
+    try:
+        if mine is not None and mine.menuAction() in mb.actions():
+            _fix_roles(mine)
+            return True
+    except RuntimeError:
+        pass
+    # the program's own Help items go away; anything that is not help (Sheets: Function list) moves to Insert / Tools
+    keep = []
+    old = menus.get("Help")
+    if old is not None:
+        try:
+            for a in list(old.actions()):
+                tl = a.text().lower().replace("&", "")
+                if not a.isSeparator() and not any(w in tl for w in ("tip", "shortcut", "quick help", "about")):
+                    keep.append(a)
+        except RuntimeError:
+            keep = []
+    _remove_top(mb, "Help")                              # always a new, clean Help menu
+    if keep:
+        host = next((menus[n] for n in ("Insert", "Tools", "Data") if n in menus), None)
+        if host is not None:
+            try:
+                host.addSeparator()
+                for a in keep:
+                    host.addAction(a)
+            except RuntimeError:
+                pass
+    hmenu = QMenu("Help", win)
+    win._digonto_help_menu = hmenu                      # keep the Python object alive with the window
+    mb.addMenu(hmenu)
+    hmenu.setProperty("_digonto_help", True)
+    tips = QAction("Quick tips", hmenu)
+    tips.triggered.connect(lambda: show_quick_help(win, name))
+    keys = QAction("Shortcuts", hmenu)
+    keys.triggered.connect(lambda: show_all_shortcuts(win, name))
+    about = QAction("About", hmenu)
+    about.triggered.connect(lambda: on_about())
+    hmenu.addAction(tips)
+    hmenu.addAction(keys)
+    hmenu.addSeparator()
+    hmenu.addAction(about)
+    _fix_roles(hmenu)
+    if sys.platform == "darwin":                         # macOS: also "About ..." in the program menu, as Mac users expect
+        mac_about = QAction("About " + title, win)
+        mac_about.setMenuRole(QAction.AboutRole)
+        mac_about.triggered.connect(lambda: on_about())
+        host = next((m for n, m in _top_menus(mb).items() if m is not hmenu), None)
+        if host is not None:
+            host.addAction(mac_about)
+    return True
+
+
+def _fix_roles(menu):
+    """Qt on macOS moves items called About/Settings/Quit into the program menu; in Help they must stay where they are"""
+    from PySide6.QtGui import QAction
+    for a in menu.actions():
+        a.setMenuRole(QAction.NoRole)
+
+
+def _keep_help(header, title, on_about):
+    """install the Help menu as soon as the header sits in a window with a menu bar, and again each time it is shown"""
+    from PySide6.QtCore import QObject, QEvent
+
+    class _Watch(QObject):
+        def eventFilter(self, obj, ev):
+            if ev.type() in (QEvent.Show, QEvent.WindowActivate):
+                install_help_menu(obj, title, on_about)
+            return False
+
+    def attempt(n=0):
+        try:
+            w = header.window()
+        except RuntimeError:
+            return
+        if w is not header and hasattr(w, "menuBar"):
+            install_help_menu(w, title, on_about)
+            if not w.property("_help_watch"):
+                w.setProperty("_help_watch", True)
+                f = _Watch(w)
+                w.installEventFilter(f)
+                w._digonto_help_watch = f
+            if n < 3:                                    # the program may add its own menus a little later
+                QTimer.singleShot(400, lambda: attempt(n + 1))
+        elif n < 60:
+            QTimer.singleShot(100, lambda: attempt(n + 1))
+    QTimer.singleShot(0, attempt)
