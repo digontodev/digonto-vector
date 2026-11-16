@@ -13,8 +13,7 @@ Get the newest version from the **[Releases page](https://github.com/digontodev/
 | System | File |
 |---|---|
 | Windows 10 / 11 (64-bit) | `Digonto-Vector-<version>-Windows-Setup.exe` |
-| macOS 11 or newer, Apple silicon (M1 and newer) | `Digonto-Vector-<version>-macOS-arm64.dmg` |
-| macOS 11 or newer, Intel | `Digonto-Vector-<version>-macOS-x86_64.dmg` |
+| macOS 13 or newer (Intel and Apple silicon) | `Digonto-Vector-<version>-macOS-x86_64.dmg` |
 | Ubuntu 24.04+ / Debian 13+ (64-bit) | `digonto-vector_<version>_amd64.deb` |
 
 - **Windows:** run the setup file. Windows may show "Windows protected your PC": click *More info* > *Run anyway* (the program is not signed yet).
