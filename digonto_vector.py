@@ -948,6 +948,13 @@ class Main(QMainWindow):
             self.open_path(p)
 
     def open_path(self, p):
+        self._open_path(p)
+        fams = [it.meta.get("family") for it in self.v.scene_.items()
+                if isinstance(it, VItem) and getattr(it, "kind", "") == "text" and getattr(it, "meta", None)]
+        if any(not ui.font_installed(x) for x in fams):
+            QTimer.singleShot(150, lambda: ui.note_missing_fonts(self, fams))
+
+    def _open_path(self, p):
         from vkit.model import load_into
         for k, rec in enumerate(self.docs):               # already open? just show it
             if os.path.abspath(rec.get("path") or "") == os.path.abspath(p) and rec.get("path"):
