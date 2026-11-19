@@ -1,7 +1,7 @@
 {
   "slug": "digonto-vector",
   "name": "Digonto Vector",
-  "version": "1.3.7",
+  "version": "1.3.8",
   "comment": "Draw logos, shapes and illustrations - easy like CorelDRAW",
   "entry": "digonto_vector.py",
   "files": [

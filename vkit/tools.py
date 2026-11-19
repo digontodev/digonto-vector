@@ -908,6 +908,9 @@ class TextTool(Tool):
         self.v.add_item(item, "Text")
 
     def edit(self, it):
+        import digonto_ui as ui
+        if not ui.warn_missing_font(self.v.window(), it.meta.get("family")):
+            return
         text, ok = QInputDialog.getMultiLineText(self.v, "Edit text", "Text:", it.meta.get("text", ""))
         if not ok or not text.strip():
             return

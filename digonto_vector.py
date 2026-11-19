@@ -139,6 +139,7 @@ class Main(QMainWindow):
         self.on_doc()
         self.restore_layout()
         self._add_tab()
+        self.show_start()
         if path:
             self.open_path(path)
 
@@ -174,7 +175,16 @@ class Main(QMainWindow):
         # a window inside the window: the side panels dock here, so they start below the header (like Digonto Images)
         self.inner = QMainWindow()
         self.inner.setWindowFlags(Qt.Widget)
-        self.inner.setCentralWidget(body)
+        self.start = ui.StartScreen(
+            "Draw logos, shapes and illustrations - SVG, PDF, EPS and AI",
+            [("New drawing", "new", self.start_new, True), ("Open …", "open", self.open_dialog, False)],
+            "or drop a drawing here (SVG, PDF, EPS, AI)", lambda: ui.recent_paths(SLUG), self.open_path)
+        from PySide6.QtWidgets import QStackedWidget
+        self.centre = QStackedWidget()
+        self.centre.addWidget(self.start)
+        self.centre.addWidget(body)
+        self.inner.setCentralWidget(self.centre)
+        self.setAcceptDrops(True)
         central = QWidget()
         cl = QVBoxLayout(central)
         cl.setContentsMargins(0, 0, 0, 0)
@@ -190,6 +200,17 @@ class Main(QMainWindow):
         self.tools_bar.setMovable(False)
         self.tools_bar.setIconSize(QSize(28, 28))
         self.tool_actions = {}
+        # the Digonto file icons at the top of the tool column (same order as every Digonto program)
+        self.file_actions = {}
+        for key, kind, tip, fn in (("new", "new", "New drawing (Ctrl+N)", self.start_new), ("open", "open", "Open (Ctrl+O)", self.open_dialog),
+                                   ("save", "save", "Save (Ctrl+S)", self.save), ("export", "export", "Save as / export", self.rail_export),
+                                   ("print", "print", "Print (Ctrl+P)", self.print_doc)):
+            fa = QAction(ui.line_icon(kind, 24), tip.split(" (")[0], self)
+            fa.setToolTip(tip)
+            fa.triggered.connect(lambda _=False, f=fn: f())
+            self.tools_bar.addAction(fa)
+            self.file_actions[key] = fa
+        self.tools_bar.addSeparator()
         grp = QActionGroup(self)
         for name, label, key in (("select", "Select", "V"), ("node", "Node edit", "A"), ("pen", "Pen (curves)", "P"), ("rect", "Rectangle", "R"),
                                  ("ellipse", "Ellipse", "E"), ("polygon", "Polygon", "G"), ("star", "Star", "S"), ("line", "Line", "L"),
@@ -915,6 +936,7 @@ class Main(QMainWindow):
             self._switching = False
             self._untitled = 0
             self._add_tab()
+            self.show_start()
             return
         self._switching = True
         self.docs.pop(i)
@@ -930,10 +952,61 @@ class Main(QMainWindow):
                 return False
         return True
 
+    # ------------------------------------------------------------------ start screen
+    def show_start(self):
+        self.start.refresh()
+        self.centre.setCurrentIndex(0)
+        for k in ("save", "export", "print"):
+            self.file_actions[k].setEnabled(False)
+
+    def show_work(self):
+        self.centre.setCurrentIndex(1)
+        for k in ("save", "export", "print"):
+            self.file_actions[k].setEnabled(True)
+
+    def start_new(self):
+        if self.centre.currentIndex() == 0:          # from the start screen: the empty A4 page that is ready
+            self.show_work()
+            QTimer.singleShot(0, self.v.fit_page)
+        else:
+            self.new_doc()
+
+    def rail_export(self):
+        m = QMenu(self)
+        m.addAction("Save as …", self.save_as)
+        m.addSeparator()
+        for label, kind in (("SVG …", "svg"), ("PNG image …", "png"), ("PDF …", "pdf"), ("EPS (Illustrator, Inkscape) …", "eps"),
+                            ("AI (Adobe Illustrator) …", "ai")):
+            m.addAction(label, lambda k=kind: self.export(k))
+        w = self.tools_bar.widgetForAction(self.file_actions["export"])
+        m.exec(w.mapToGlobal(w.rect().topRight()) if w else self.cursor().pos())
+
+    def dragEnterEvent(self, ev):
+        if ev.mimeData().hasUrls():
+            ev.acceptProposedAction()
+            if self.centre.currentIndex() == 0:
+                self.start.set_dropping(True)
+
+    def dragLeaveEvent(self, ev):
+        self.start.set_dropping(False)
+
+    def dropEvent(self, ev):
+        self.start.set_dropping(False)
+        for u in ev.mimeData().urls():
+            if u.isLocalFile() and u.toLocalFile().lower().endswith((".dvec", ".pvec", ".svg", ".ai", ".eps", ".pdf")):
+                self.open_path(u.toLocalFile())
+
     def new_doc(self):
         d = PageDialog(self, "New drawing")
         if d.exec():
-            self._add_tab(d.w.value(), d.h.value())
+            pristine = len(self.docs) == 1 and not self.v.dirty and not self.v.path and self.centre.currentIndex() == 0
+            if pristine:                                   # replace the unused start page instead of adding a tab
+                self.v.new_document(d.w.value(), d.h.value())
+                self.docs[0].update(self._rec_from_view())
+                self.on_doc()
+            else:
+                self._add_tab(d.w.value(), d.h.value())
+            self.show_work()
 
     def page_setup(self):
         d = PageDialog(self, "Page size", self.v.page.w_mm, self.v.page.h_mm)
@@ -948,6 +1021,14 @@ class Main(QMainWindow):
             self.open_path(p)
 
     def open_path(self, p):
+        self._open_path(p)
+        self.show_work()
+        fams = [it.meta.get("family") for it in self.v.scene_.items()
+                if isinstance(it, VItem) and getattr(it, "kind", "") == "text" and getattr(it, "meta", None)]
+        if any(not ui.font_installed(x) for x in fams):
+            QTimer.singleShot(150, lambda: ui.note_missing_fonts(self, fams))
+
+    def _open_path(self, p):
         from vkit.model import load_into
         for k, rec in enumerate(self.docs):               # already open? just show it
             if os.path.abspath(rec.get("path") or "") == os.path.abspath(p) and rec.get("path"):
