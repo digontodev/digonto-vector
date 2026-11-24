@@ -200,8 +200,12 @@ class VItem(QGraphicsPathItem):
 
     def bake(self, t: QTransform):
         self.set_path(t.map(self.path()))
-        if "mirror_fix" in self.meta:
-            pass
+        if self.kind == "text" and self.meta:
+            # a pure turn keeps the text editable: remember the angle, the letters are rebuilt from it
+            a, b, c, d = t.m11(), t.m12(), t.m21(), t.m22()
+            if abs(a * d - b * c - 1) < 1e-4 and abs(a - d) < 1e-6 and abs(b + c) < 1e-6 and abs(b) > 1e-9:
+                ang = (self.meta.get("angle", 0) + math.degrees(math.atan2(b, a))) % 360
+                self.meta["angle"] = round(ang, 4) if abs(ang) > 1e-6 and abs(ang - 360) > 1e-6 else 0
 
     def to_json(self):
         return {"t": "item", "kind": self.kind, "path": path_to_json(self.path()), "rule": 1 if self.path().fillRule() == Qt.OddEvenFill else 0,
