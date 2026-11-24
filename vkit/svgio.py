@@ -325,7 +325,7 @@ def _len(v, default=0.0):
 
 _CSS = {}                                  # class name -> {property: value}  (Illustrator writes its colours this way)
 _PROPS = ("fill", "stroke", "stroke-width", "opacity", "fill-rule", "stroke-linejoin", "stroke-linecap", "stroke-dasharray",
-          "font-family", "font-size", "font-weight", "font-style")
+          "font-family", "font-size", "font-weight", "font-style", "text-anchor", "dominant-baseline")
 _NOT_INHERITED = ()
 
 
@@ -397,6 +397,45 @@ def _family(v):
     first = plain[0] if plain else (names[0] if names else "Sans Serif")
     first = first.partition("-")[0] if "-" in first and " " not in first else first
     return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", first), bold, italic
+
+
+def _anchor_shift(meta, size, pos, st):
+    """text-anchor (start / middle / end) and dominant-baseline (central, middle, hanging ...) -> the baseline start point"""
+    from PySide6.QtGui import QFont, QFontMetricsF
+    anchor = (st.get("text-anchor") or "start").strip()
+    base = (st.get("dominant-baseline") or "auto").strip()
+    if anchor in ("start", "inherit") and base in ("auto", "alphabetic", "inherit"):
+        return pos
+    f = QFont(meta["family"]); f.setPixelSize(max(1, int(round(size))))
+    f.setBold(meta["bold"]); f.setItalic(meta["italic"])
+    fm = QFontMetricsF(f)
+    x, y = pos
+    w = max(fm.horizontalAdvance(line) for line in meta["text"].split("\n"))
+    if anchor == "middle":
+        x -= w / 2
+    elif anchor == "end":
+        x -= w
+    if base in ("central", "mathematical"):
+        y += (fm.ascent() - fm.descent()) / 2
+    elif base == "middle":
+        y += fm.xHeight() / 2
+    elif base in ("hanging", "text-before-edge"):
+        y += fm.ascent()
+    elif base in ("text-after-edge", "ideographic"):
+        y -= fm.descent()
+    return x, y
+
+
+def _is_page_background(el, vb):
+    """a plain white rectangle that fills the whole page: the page itself, not a shape to click on"""
+    if el.tag.split("}")[-1] != "rect" or vb is None:
+        return False
+    st = _style(el, {})
+    if (_color(st.get("fill", "#000000")) or "").lower() not in ("#ffffff", "#fff", "white") or st.get("stroke") not in (None, "none"):
+        return False
+    vx, vy, vw, vh = vb
+    x, y, w, h = _len(el.get("x")), _len(el.get("y")), _len(el.get("width")), _len(el.get("height"))
+    return x <= vx + 0.5 and y <= vy + 0.5 and x + w >= vx + vw - 0.5 and y + h >= vy + vh - 0.5
 
 
 def import_svg(text, scene, with_layers=False):
@@ -548,6 +587,7 @@ def import_svg(text, scene, with_layers=False):
                 "bold": fb or (st2.get("font-weight") or "normal") in ("bold", "bolder", "600", "700", "800", "900"),
                 "italic": fi or (st2.get("font-style") or "normal") in ("italic", "oblique")}
         rotated = abs(T.m12()) > 1e-6 or abs(T.m21()) > 1e-6 or T.m11() < 0 or T.m22() < 0
+        pos = _anchor_shift(meta, size, pos, st2)
         o = T.map(QPointF(*pos))
         if rotated:
             p = T.map(text_path(dict(meta, size=size), QPointF(*pos)))
@@ -613,7 +653,8 @@ def import_svg(text, scene, with_layers=False):
     tops = [c for c in root if c.tag.split("}")[-1] not in ("defs", "namedview", "metadata", "title", "desc", "style")]
     layer_els = [c for c in tops if is_layer(c)]
     gs = [c for c in tops if c.tag.split("}")[-1] == "g"]
-    if len(layer_els) < len(gs) and len(gs) >= 2 and len(gs) == len(tops) and all(g.get("id") or _attr(g, "label") for g in gs):
+    tops = [c for c in tops if not _is_page_background(c, (vx, vy, vw, vh) if vb else None)]
+    if len(layer_els) < len(gs) and len(gs) >= 2 and all(g.get("id") or _attr(g, "label") for g in gs):
         layer_els = gs                                  # Illustrator: every top-level group with a name is a layer
     layers, top = [], []
     if with_layers and layer_els and len(layer_els) == len(gs):
@@ -638,7 +679,7 @@ def import_svg(text, scene, with_layers=False):
                 it.layer = lid
                 top.append(it)
     else:
-        for c in root:
+        for c in tops:
             walk(c, {"fill": "#000000"}, base, top)
     for it in top:
         scene.addItem(it)
