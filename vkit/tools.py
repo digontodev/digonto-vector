@@ -50,8 +50,20 @@ def text_path(meta, origin=QPointF(0, 0)):
     lh = QFontMetricsF_height(f)
     for i, line in enumerate(meta.get("text", "").split("\n")):
         p.addText(0, i * lh, f, line)
+    a = meta.get("angle", 0)
+    if a:
+        p = QTransform().rotate(a).map(p)              # turned around the start of the first baseline
     p.translate(origin)
     return p
+
+
+def hit_text(v, pos):
+    """the text object under pos, also inside a group (a table number in a seating plan ...)"""
+    t = 3 / v.zoom_factor()
+    for it in v.scene_.items(QRectF(pos.x() - t, pos.y() - t, 2 * t, 2 * t), Qt.IntersectsItemBoundingRect, Qt.DescendingOrder):
+        if isinstance(it, VItem) and it.kind == "text" and it.isVisible() and not top_of(it).is_locked():
+            return it
+    return None
 
 
 def QFontMetricsF_height(f):
@@ -240,6 +252,10 @@ class SelectTool(Tool):
         self.orig = []
 
     def double(self, p, e):
+        txt = hit_text(self.v, p)
+        if txt is not None and txt.group() is not None:   # text inside a group: edit it in place
+            self.v.tools["text"].edit(txt)
+            return
         it = hit_item(self.v, p)
         if it is None:
             return
@@ -891,8 +907,8 @@ class TextTool(Tool):
     def press(self, p, e):
         if e.button() != Qt.LeftButton:
             return
-        it = hit_item(self.v, p)
-        if isinstance(it, VItem) and it.kind == "text":
+        it = hit_text(self.v, p)
+        if it is not None:
             self.edit(it)
             return
         meta = dict(self.v.text_opt)
@@ -917,8 +933,17 @@ class TextTool(Tool):
         top_left = it.path().boundingRect().topLeft()
         old = text_path(it.meta)
         origin = it.path().boundingRect().topLeft() - old.boundingRect().topLeft()
+        before = it.path().boundingRect()
         it.meta["text"] = text
-        it.set_path(text_path(it.meta, origin))
+        p = text_path(it.meta, origin)
+        anchor = it.meta.get("anchor")
+        if anchor in ("middle", "end"):                  # centred labels (table numbers ...) stay centred
+            after = p.boundingRect()
+            if anchor == "middle" or it.meta.get("angle"):
+                p.translate(before.center() - after.center())
+            else:
+                p.translate(before.right() - after.right(), 0)
+        it.set_path(p)
         self.v.commit("Edit text")
 
     def restyle_selected(self):

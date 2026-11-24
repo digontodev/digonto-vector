@@ -127,6 +127,9 @@ def export_svg(scene, page, items=None, layers=None):
                      f"line-height:{lh:.2f}px")
             spans = "".join(f'<tspan sodipodi:role="line" x="{org[0]:.3f}" y="{org[1] + k * lh:.3f}">{_esc(line) or " "}</tspan>'
                             for k, line in enumerate(m["text"].split("\n")))
+            if m.get("angle"):
+                r = QTransform(); r.translate(org[0], org[1]); r.rotate(m["angle"]); r.translate(-org[0], -org[1])
+                t = r * t
             body.append(f'{ind}<text xml:space="preserve"{nm} style="{style}" fill="{fill}"{st}{op}{_matrix(t)}>{spans}</text>')
             return
         rule = ' fill-rule="evenodd"' if it.path().fillRule() == Qt.OddEvenFill else ""
@@ -589,6 +592,14 @@ def import_svg(text, scene, with_layers=False):
         rotated = abs(T.m12()) > 1e-6 or abs(T.m21()) > 1e-6 or T.m11() < 0 or T.m22() < 0
         pos = _anchor_shift(meta, size, pos, st2)
         o = T.map(QPointF(*pos))
+        a, b, c, d = T.m11(), T.m12(), T.m21(), T.m22()
+        tol = 1e-3 * max(abs(a), abs(b), abs(c), abs(d), 1e-9)
+        if st2.get("text-anchor", "start").strip() in ("middle", "end"):
+            meta["anchor"] = st2["text-anchor"].strip()          # editing keeps the text centred (or right-aligned)
+        if rotated and abs(a - d) < tol and abs(b + c) < tol and a * d - b * c > 0:
+            # turned (not mirrored or squashed): stays editable text with its angle
+            meta["angle"] = round(math.degrees(math.atan2(b, a)) % 360, 4)
+            rotated = False
         if rotated:
             p = T.map(text_path(dict(meta, size=size), QPointF(*pos)))
         else:
