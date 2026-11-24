@@ -422,11 +422,23 @@ def set_geometry(v, x=None, y=None, w=None, h=None):
 
 
 # ---------------------------------------------------------------- align / distribute
-def align(v, mode, to_page=False):
+def align(v, mode, to_page=False, to="selection"):
+    """to: selection, page or key (the key object stays, the others move to it)"""
+    if to_page:
+        to = "page"
     s = sel(v)
-    if not s or (len(s) < 2 and not to_page):
+    key = getattr(v, "key_object", None)
+    if to == "key" and (key is None or key not in s):
+        to = "selection"
+    if not s or (len(s) < 2 and to != "page"):
         return
-    ref = v.page.rect if to_page else union_rect(s)
+    if to == "page":
+        ref = v.page.rect
+    elif to == "key":
+        ref = geom_rect(key)
+        s = [i for i in s if i is not key]
+    else:
+        ref = union_rect(s)
     for it in s:
         r = geom_rect(it)
         dx = dy = 0.0

@@ -57,6 +57,25 @@ def text_path(meta, origin=QPointF(0, 0)):
     return p
 
 
+_ROT = []
+
+
+def ROTATE_CURSOR():
+    """a curved double arrow, drawn once"""
+    if not _ROT:
+        from PySide6.QtGui import QCursor, QPixmap, QPainter
+        pm = QPixmap(24, 24); pm.fill(Qt.transparent)
+        q = QPainter(pm); q.setRenderHint(QPainter.Antialiasing)
+        for col, w in ((QColor("#FFFFFF"), 4.0), (QColor("#000000"), 1.6)):
+            q.setPen(QPen(col, w, Qt.SolidLine, Qt.RoundCap)); q.setBrush(Qt.NoBrush)
+            q.drawArc(QRectF(5, 5, 14, 14), 20 * 16, 140 * 16)
+            for (x, y, dx, dy) in ((18.6, 9.6, -3.5, -0.5), (18.6, 9.6, 0.5, -3.5), (5.4, 9.6, 3.5, -0.5), (5.4, 9.6, -0.5, -3.5)):
+                q.drawLine(QPointF(x, y), QPointF(x + dx, y + dy))
+        q.end()
+        _ROT.append(QCursor(pm, 12, 12))
+    return _ROT[0]
+
+
 def hit_text(v, pos):
     """the text object under pos, also inside a group (a table number in a seating plan ...)"""
     t = 3 / v.zoom_factor()
@@ -117,16 +136,30 @@ class SelectTool(Tool):
                 return i
         return None
 
+    def in_rotate_zone(self, p):
+        """just outside a corner of the selection box: drag there to rotate (as in Illustrator)"""
+        r = self.bbox()
+        if r is None:
+            return False
+        z = self.v.zoom_factor()
+        if r.adjusted(-2 / z, -2 / z, 2 / z, 2 / z).contains(p):
+            return False
+        for c in (r.topLeft(), r.topRight(), r.bottomLeft(), r.bottomRight()):
+            if math.hypot(p.x() - c.x(), p.y() - c.y()) * z < 22:
+                return True
+        return False
+
     def press(self, p, e):
         v = self.v
         if e.button() != Qt.LeftButton:
             return
         self.start = QPointF(p)
         self.moved = False
+        self.key_click = None
         h = self.hit_handle(p)
         sel = v.selected()
-        if h is not None:
-            self.mode = "rotate" if h == 8 else "scale"
+        if h is not None or self.in_rotate_zone(p):
+            self.mode = "rotate" if (h is None or h == 8) else "scale"
             self.h = h
             self.r0 = self.bbox()
             self.snapshot()
@@ -139,6 +172,8 @@ class SelectTool(Tool):
                 it.setSelected(not it.isSelected())
                 self.mode = None
                 return
+            if it.isSelected() and len(sel) > 1:
+                self.key_click = it                     # a click (no drag) on one of several: the key object
             if not it.isSelected():
                 v.scene_.clearSelection()
                 it.setSelected(True)
@@ -169,6 +204,8 @@ class SelectTool(Tool):
     def move(self, p, e):
         v = self.v
         if not self.dragging:
+            want = ROTATE_CURSOR() if self.in_rotate_zone(p) else Qt.ArrowCursor
+            v.viewport().setCursor(want)
             return
         if self.mode == "band":
             self.band = QRectF(self.start, p).normalized()
@@ -246,6 +283,9 @@ class SelectTool(Tool):
                     it.setSelected(True)
             self.mode = None
             return
+        if self.mode == "move" and not self.moved and getattr(self, "key_click", None) is not None:
+            v.key_object = None if v.key_object is self.key_click else self.key_click
+            v.message.emit("Key object set: Align moves the others to it" if v.key_object else "Key object cleared")
         if self.mode in ("move", "scale", "rotate") and self.moved:
             v.commit({"move": "Move", "scale": "Resize", "rotate": "Rotate"}[self.mode])
         self.mode = None
@@ -298,6 +338,9 @@ class SelectTool(Tool):
             return
         pt.setPen(QPen(BLUE, 0, Qt.DashLine)); pt.setBrush(Qt.NoBrush)
         pt.drawRect(r)
+        ko = getattr(v, "key_object", None)
+        if ko is not None and ko.scene() is v.scene_ and ko.isSelected():
+            pt.setPen(QPen(BLUE, 3 / z)); pt.drawRect(geom_rect(ko))
         hs = self.handles(r, z)
         pt.drawLine(hs[1], hs[8])
         pt.setPen(QPen(BLUE, 0)); pt.setBrush(QColor("#FFFFFF"))

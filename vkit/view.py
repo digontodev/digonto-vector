@@ -22,6 +22,7 @@ class VectorView(QGraphicsView):
     def __init__(self):
         super().__init__()
         self.scene_ = QGraphicsScene(self)
+        self.key_object = None
         self.scene_.setSceneRect(-20000, -20000, 40000, 40000)
         self.setScene(self.scene_)
         self.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform | QPainter.TextAntialiasing)
@@ -179,6 +180,9 @@ class VectorView(QGraphicsView):
         self.docChanged.emit()
 
     def _sel_changed(self):
+        ko = getattr(self, "key_object", None)
+        if ko is not None and (ko.scene() is not self.scene_ or not ko.isSelected() or len(self.selected()) < 2):
+            self.key_object = None
         self.selectionChanged2.emit()
         self.viewport().update()
 

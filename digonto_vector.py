@@ -29,7 +29,7 @@ SLUG = "digonto-vector"
 PAGES = {"A4": (210, 297), "A3": (297, 420), "A5": (148, 210), "A6": (105, 148), "Letter": (215.9, 279.4), "Legal": (215.9, 355.6),
          "Square 200 mm": (200, 200), "Business card": (90, 55), "Sticker 100 mm": (100, 100)}
 HINTS = {
-    "select": "Click to select, drag to move. Handles resize; the round handle rotates. Shift adds. Double-click edits nodes.",
+    "select": "Click to select, drag to move. Handles resize; drag just outside a corner (or the round handle) to rotate. Shift adds. Click once more on one of several to make it the key object for Align. Double-click edits nodes or text.",
     "node": "Drag nodes and handles. Double-click a line to add a node, double-click a node to smooth it. Delete removes nodes.",
     "pen": "Click for corners, click-drag for curves. Click the first point to close. Enter finishes, Esc cancels.",
     "rect": "Drag to draw. Shift = square, Ctrl = from the centre. Set corner roundness above.",
@@ -212,10 +212,11 @@ class Main(QMainWindow):
             self.file_actions[key] = fa
         self.tools_bar.addSeparator()
         grp = QActionGroup(self)
-        for name, label, key in (("select", "Select", "V"), ("node", "Node edit", "A"), ("pen", "Pen (curves)", "P"), ("rect", "Rectangle", "R"),
-                                 ("ellipse", "Ellipse", "E"), ("polygon", "Polygon", "G"), ("star", "Star", "S"), ("line", "Line", "L"),
-                                 ("pencil", "Freehand", "B"), ("text", "Text", "T"), ("eyedropper", "Eyedropper", "I"),
-                                 ("zoom", "Zoom", "Z"), ("hand", "Pan", "H")):
+        # the same keys as Illustrator, so nobody has to learn them again
+        for name, label, key in (("select", "Select", "V"), ("node", "Node edit (direct select)", "A"), ("pen", "Pen (curves)", "P"),
+                                 ("rect", "Rectangle", "M"), ("ellipse", "Ellipse", "L"), ("polygon", "Polygon", "Y"), ("star", "Star", "S"),
+                                 ("line", "Line", "\\"), ("pencil", "Pencil (freehand)", "N"), ("text", "Text", "T"), ("eyedropper", "Eyedropper", "I"),
+                                 ("zoom", "Zoom", "Z"), ("hand", "Hand (or hold Space)", "H")):
             a = QAction(tool_icon(name), label, self)
             a.setCheckable(True)
             a.setShortcut(key)
@@ -367,12 +368,16 @@ class Main(QMainWindow):
     def _panel_align(self):
         w = QWidget()
         l = QVBoxLayout(w)
-        self.al_page = QCheckBox("Relative to the page")
-        l.addWidget(self.al_page)
+        row = QHBoxLayout(); row.addWidget(QLabel("Align to"))
+        self.al_to = QComboBox()
+        for t, d in (("Selection", "selection"), ("Key object", "key"), ("Page", "page")):
+            self.al_to.addItem(t, d)
+        self.al_to.setToolTip("Key object: click once more on one of the selected objects; it stays, the others move to it")
+        row.addWidget(self.al_to, 1); l.addLayout(row)
         g = QGridLayout()
         items = [("Left", "left"), ("Centre", "hcenter"), ("Right", "right"), ("Top", "top"), ("Middle", "vcenter"), ("Bottom", "bottom")]
         for k, (t, m) in enumerate(items):
-            b = QPushButton(t); b.clicked.connect(lambda _=False, mm=m: ops.align(self.v, mm, self.al_page.isChecked()))
+            b = QPushButton(t); b.clicked.connect(lambda _=False, mm=m: self.do_align(mm))
             g.addWidget(b, k // 3, k % 3)
         l.addLayout(g)
         b = QPushButton("Centre on page"); b.clicked.connect(lambda: ops.center_on_page(self.v)); l.addWidget(b)
@@ -390,6 +395,15 @@ class Main(QMainWindow):
         b = QPushButton("Make copies"); b.clicked.connect(lambda: ops.step_repeat(self.v, self.sr_n.value(), self.sr_dx.value(), self.sr_dy.value())); l.addWidget(b)
         l.addStretch()
         return w
+
+    def do_align(self, mode):
+        to = self.al_to.currentData()
+        if to == "key" and self.v.key_object is None and len(self.v.selected()) > 1:
+            self.v.message.emit("Click once more on the object the others should align to")
+            return
+        if to == "selection" and self.v.key_object is not None:
+            to = "key"                               # as in Illustrator: a key object always wins
+        ops.align(self.v, mode, to=to)
 
     def _panel_shaping(self):
         w = QWidget()
@@ -529,30 +543,32 @@ class Main(QMainWindow):
         em.addSeparator()
         self.act(em, "Select all", lambda: ops.select_all(v), "Ctrl+A")
         self.act(em, "Deselect", v.scene_.clearSelection, "Ctrl+Shift+A")
+        self.act(em, "Paste in front", lambda: ops.paste(v, True), "Ctrl+F")
+        self.act(em, "Paste in back", lambda: (ops.paste(v, True), ops.arrange(v, "back")), "Ctrl+B")
         self.act(em, "Invert selection", lambda: ops.invert_selection(v))
 
         om = mb.addMenu("&Object")
         am = om.addMenu("Arrange")
-        self.act(am, "To front", lambda: ops.arrange(v, "front"), "Shift+PgUp")
-        self.act(am, "Forward one", lambda: ops.arrange(v, "forward"), "Ctrl+PgUp")
-        self.act(am, "Back one", lambda: ops.arrange(v, "backward"), "Ctrl+PgDown")
-        self.act(am, "To back", lambda: ops.arrange(v, "back"), "Shift+PgDown")
+        self.act(am, "To front", lambda: ops.arrange(v, "front"), "Ctrl+Shift+]")
+        self.act(am, "Forward one", lambda: ops.arrange(v, "forward"), "Ctrl+]")
+        self.act(am, "Back one", lambda: ops.arrange(v, "backward"), "Ctrl+[")
+        self.act(am, "To back", lambda: ops.arrange(v, "back"), "Ctrl+Shift+[")
         self.act(om, "Group", lambda: ops.group(v), "Ctrl+G")
-        self.act(om, "Ungroup", lambda: ops.ungroup(v), "Ctrl+U")
-        self.act(om, "Combine", lambda: ops.combine(v), "Ctrl+L")
-        self.act(om, "Break apart", lambda: ops.break_apart(v), "Ctrl+K")
+        self.act(om, "Ungroup", lambda: ops.ungroup(v), "Ctrl+Shift+G")
+        self.act(om, "Combine (compound path)", lambda: ops.combine(v), "Ctrl+8")
+        self.act(om, "Break apart (release compound path)", lambda: ops.break_apart(v), "Ctrl+Alt+Shift+8")
         om.addSeparator()
-        self.act(om, "Lock", lambda: ops.lock(v, True))
-        self.act(om, "Unlock all", lambda: ops.unlock_all(v))
-        self.act(om, "Hide", lambda: ops.hide(v))
-        self.act(om, "Show all", lambda: ops.show_all(v))
+        self.act(om, "Lock", lambda: ops.lock(v, True), "Ctrl+2")
+        self.act(om, "Unlock all", lambda: ops.unlock_all(v), "Ctrl+Alt+2")
+        self.act(om, "Hide", lambda: ops.hide(v), "Ctrl+3")
+        self.act(om, "Show all", lambda: ops.show_all(v), "Ctrl+Alt+3")
         om.addSeparator()
-        self.act(om, "Clip to shape", lambda: ops.clip_to_top(v))
+        self.act(om, "Clip to shape (clipping mask)", lambda: ops.clip_to_top(v), "Ctrl+7")
         self.act(om, "Blend…", lambda: ops.blend(v, self.bl_n.value()))
         self.act(om, "Round corners", lambda: ops.round_corners(v, self.rc_r.value()))
         self.act(om, "Trace image…", self.trace_dialog)
         self.act(om, "Outline → object", lambda: ops.outline_to_object(v))
-        self.act(om, "Text → curves", lambda: ops.to_curves(v))
+        self.act(om, "Text → curves (create outlines)", lambda: ops.to_curves(v), "Ctrl+Shift+O")
         tm = om.addMenu("Transform")
         self.act(tm, "Mirror left-right", lambda: ops.mirror(v, True))
         self.act(tm, "Mirror top-bottom", lambda: ops.mirror(v, False))
@@ -573,17 +589,17 @@ class Main(QMainWindow):
         self.act(vm, "Zoom out", lambda: v.zoom_to(v.zoom_factor() / 1.5), "Ctrl+-")
         self.act(vm, "Fit page", v.fit_page, "Ctrl+0")
         self.act(vm, "Actual size (100 %)", lambda: v.zoom_to(1.0), "Ctrl+1")
-        self.act(vm, "Zoom to selection", v.zoom_selection, "Ctrl+2")
+        self.act(vm, "Zoom to selection", v.zoom_selection, "Ctrl+Alt+0")
         vm.addSeparator()
-        self.a_grid = self.act(vm, "Show grid", lambda on: (v.grid.__setitem__("show", on), v.viewport().update()), checkable=True)
+        self.a_grid = self.act(vm, "Show grid", lambda on: (v.grid.__setitem__("show", on), v.viewport().update()), "Ctrl+'", checkable=True)
         self.a_gsnap = self.act(vm, "Snap to grid", lambda on: v.grid.__setitem__("snap", on), checkable=True)
         self.act(vm, "Grid spacing…", self.grid_dialog)
         self.act(vm, "Snap to objects and page", lambda on: setattr(v, "snap_objects", on), checkable=True, checked=True)
         self.act(vm, "Snap to guides", lambda on: setattr(v, "snap_guides", on), checkable=True, checked=True)
-        self.act(vm, "Show guides", lambda on: (setattr(v, "show_guides", on), v.viewport().update()), checkable=True, checked=True)
+        self.act(vm, "Show guides", lambda on: (setattr(v, "show_guides", on), v.viewport().update()), "Ctrl+;", checkable=True, checked=True)
         self.act(vm, "Clear all guides", self.clear_guides)
         vm.addSeparator()
-        self.act(vm, "Wireframe view", self.set_wireframe, "Ctrl+Shift+W", checkable=True)
+        self.act(vm, "Wireframe view (outline)", self.set_wireframe, "Ctrl+Y", checkable=True)
         vm.addSeparator()
         ta = self.d_side.toggleViewAction()
         ta.setText("Side panels (all)")
@@ -618,6 +634,11 @@ class Main(QMainWindow):
         wm.addSeparator()
         wm.addAction(QAction("Show all panels", self, triggered=lambda: [x.setChecked(True) for x in wm.actions() if x.isCheckable()]))
 
+        wm.addSeparator()
+        for title, key in (("Align", "Shift+F7"), ("Layers", "F7"), ("Colour", "F6"), ("Shaping", "Ctrl+Shift+F9"), ("Properties", "Ctrl+F8")):
+            if title in self.sections:
+                self.act(wm, f"Go to {title}", lambda t=title: self.show_panel(t), key)
+
         hm = mb.addMenu("&Help")
         self.act(hm, "Quick tips", self.tips)
         self.act(hm, "About", self.about)
@@ -636,6 +657,15 @@ class Main(QMainWindow):
             self.inner.resizeDocks([self.d_side], [ui.dock_width_for(self.width(), self.stack.minimumSizeHint().width())], Qt.Horizontal)
 
     # ------------------------------------------------------------------ tools
+    def show_panel(self, title):
+        """open a side panel, unfold it and scroll to it"""
+        box = self.sections[title]
+        self.d_side.show()
+        box.setVisible(True)
+        if getattr(box, "collapsed", False):
+            box.set_collapsed(False)
+        QTimer.singleShot(0, lambda: self.d_side.widget().ensureWidgetVisible(box, 0, 0))
+
     def use_tool(self, name):
         self.v.set_tool(name)
         self.tool_actions[name].setChecked(True)
@@ -1256,12 +1286,12 @@ class Main(QMainWindow):
                                 "• Shaping (Weld, Trim, Intersect…) makes new shapes from overlapping ones.\n"
                                 "• Double-click a shape to edit its nodes. Double-click a line in node mode to add a node.\n"
                                 "• Hold Space and drag to move the view; mouse wheel zooms; Shift+wheel scrolls sideways.\n"
-                                "• Ctrl+D duplicates, Ctrl+G groups, Ctrl+L combines, Ctrl+Z undoes.\n"
+                                "• Shortcuts are the same as Illustrator: V select, A direct select, P pen, M rectangle, L ellipse, T text, Ctrl+G group, Ctrl+8 compound path, Ctrl+2 lock, Ctrl+Y outline view.\n"
                                 "• Text can be edited until you use 'Text → curves'.")
 
     def about(self):
         QMessageBox.about(self, "About " + APP_NAME,
-                          f"<h3>{APP_NAME} {VERSION}</h3><p>Draw logos, shapes and illustrations with an easy, CorelDRAW-style layout.</p>"
+                          f"<h3>{APP_NAME} {VERSION}</h3><p>Draw logos, shapes and illustrations with Illustrator-style tools and shortcuts in the Digonto design.</p>"
                           "<p>Files: .dvec (own format). Import SVG, AI, EPS and PDF. Export SVG, EPS, AI, PDF and PNG.</p><p>For Inkscape and Illustrator use SVG: layers, groups and editable text are kept both ways.</p>")
 
     def closeEvent(self, ev):
