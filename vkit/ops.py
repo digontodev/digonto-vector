@@ -275,6 +275,37 @@ def shaping(v, mode):
         for p in paths[:-1]:
             r = r.subtracted(p)
         style = s[-1]
+    elif mode == "exclude":                 # keep what is covered an odd number of times (overlaps become holes)
+        r = paths[0]
+        for p in paths[1:]:
+            r = r.united(p).subtracted(r.intersected(p))
+        style = s[-1]
+    elif mode == "divide":                  # cut into every separate piece; each keeps the colour of the shape it came from
+        pieces = []                         # (path, source item)
+        for k, p in enumerate(paths):
+            nxt = []
+            rest = QPainterPath(p)
+            for q, src in pieces:
+                a, b = q.intersected(p), q.subtracted(p)
+                if not b.isEmpty():
+                    nxt.append((b, src))
+                if not a.isEmpty():
+                    nxt.append((a, s[k]))       # the overlap takes the front shape's colour
+                rest = rest.subtracted(q)
+            if not rest.isEmpty():
+                nxt.append((rest, s[k]))
+            pieces = nxt
+        z = max(x.zValue() for x in sel(v))
+        lay = layer_of(s[-1])
+        for x in sel(v):
+            v.scene_.removeItem(x)
+        new = []
+        for path, src in pieces:
+            n = VItem(path.simplified(), dict(src.fill), dict(src.stroke)); n.layer = lay; n.setZValue(z + len(new) * 1e-3)
+            v.scene_.addItem(n); new.append(n)
+        normalize_z(v); select(v, new)
+        v.commit("Divide")
+        return
     elif mode == "trim":                    # every object is trimmed by those in front, all stay
         for k in range(len(s) - 1):
             r = paths[k]
@@ -298,7 +329,7 @@ def shaping(v, mode):
     v.scene_.addItem(it)
     normalize_z(v)
     select(v, [it])
-    v.commit({"weld": "Weld", "intersect": "Intersect", "front_minus_back": "Front minus back", "back_minus_front": "Back minus front"}[mode])
+    v.commit({"weld": "Unite", "intersect": "Intersect", "exclude": "Exclude", "front_minus_back": "Minus front", "back_minus_front": "Minus back"}[mode])
 
 
 # ---------------------------------------------------------------- outline / contour
@@ -400,6 +431,49 @@ def rotate(v, deg):
         T.translate(c.x(), c.y()); T.rotate(deg); T.translate(-c.x(), -c.y())
         return T
     transform_sel(v, fn, "Rotate")
+
+
+def transform_op(v, op, record=True):
+    """move / rotate / scale / reflect the selection around its centre; op is a tuple, e.g. ("rotate", 45)
+    ("copy" at the end: transform copies and keep the originals). Remembered for Transform again."""
+    s = sel(v)
+    if not s:
+        return
+    kind, copy_ = op[0], op[-1] == "copy"
+    c = union_rect(s).center()
+    T = QTransform()
+    if kind == "move":
+        T.translate(op[1], op[2])
+    else:
+        T.translate(c.x(), c.y())
+        if kind == "rotate":
+            T.rotate(op[1])
+        elif kind == "scale":
+            T.scale(op[1], op[2])
+        elif kind == "reflect":                       # angle of the mirror axis: 90 = left-right, 0 = top-bottom
+            a = math.radians(op[1]); cx, sy = math.cos(2 * a), math.sin(2 * a)
+            T = QTransform(cx, sy, sy, -cx, 0, 0) * QTransform.fromTranslate(c.x(), c.y())
+            T = QTransform.fromTranslate(-c.x(), -c.y()) * T
+        if kind != "reflect":
+            T.translate(-c.x(), -c.y())
+    if copy_:
+        new = []
+        for it in s:
+            n = item_from_json(it.to_json()); n.setZValue(1e9 + len(new)); v.scene_.addItem(n); new.append(n)
+        normalize_z(v); select(v, new); s = new
+    for it in s:
+        it.bake(T)
+    if record:
+        v.last_transform = op
+    v.commit({"move": "Move", "rotate": "Rotate", "scale": "Scale", "reflect": "Reflect"}[kind] + (" copy" if copy_ else ""))
+
+
+def transform_again(v):
+    op = getattr(v, "last_transform", None)
+    if not op:
+        v.message.emit("Nothing to repeat yet: move, rotate or scale something first")
+        return
+    transform_op(v, op)
 
 
 def set_geometry(v, x=None, y=None, w=None, h=None):

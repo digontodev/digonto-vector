@@ -192,14 +192,31 @@ class SelectTool(Tool):
 
     def snapshot(self):
         self.orig = []
+        self.copied = False
         for it in self.v.selected():
             for lf in (it.leaves() if isinstance(it, VGroup) else [it]):
-                self.orig.append((lf, lf.path()))
+                self.orig.append((lf, lf.path(), (lf.meta or {}).get("angle", 0) if lf.kind == "text" else 0))
 
     def apply(self, T):
-        for lf, path in self.orig:
+        a, b, c, d = T.m11(), T.m12(), T.m21(), T.m22()
+        turn = abs(a * d - b * c - 1) < 1e-4 and abs(a - d) < 1e-6 and abs(b + c) < 1e-6
+        deg = math.degrees(math.atan2(b, a)) if turn else 0
+        for lf, path, ang0 in self.orig:
             lf.set_path(T.map(path))
+            if lf.kind == "text" and lf.meta and turn:          # turned text stays editable text
+                ang = (ang0 + deg) % 360
+                lf.meta["angle"] = 0 if abs(ang) < 1e-6 or abs(ang - 360) < 1e-6 else round(ang, 4)
         self.moved = True
+        self.last_T = T
+
+    def leave_copies(self):
+        """Alt + drag (as in Illustrator): copies stay where the objects were, the objects themselves move"""
+        from .model import item_from_json
+        for it in self.v.selected():
+            c = item_from_json(it.to_json())
+            c.setZValue(it.zValue() - 0.5)
+            self.v.scene_.addItem(c)
+        self.copied = True
 
     def move(self, p, e):
         v = self.v
@@ -214,6 +231,8 @@ class SelectTool(Tool):
             d = p - self.start
             if not self.moved and math.hypot(d.x(), d.y()) * v.zoom_factor() < 3:
                 return
+            if not self.moved and (e.modifiers() & Qt.AltModifier) and not self.copied:
+                self.leave_copies()
             if e.modifiers() & Qt.ShiftModifier:
                 if abs(d.x()) > abs(d.y()):
                     d = QPointF(d.x(), 0)
@@ -222,7 +241,7 @@ class SelectTool(Tool):
             r = self.r0
             best = [d.x(), d.y()]
             bdx = bdy = 1e9
-            if not (e.modifiers() & Qt.AltModifier):
+            if not (e.modifiers() & Qt.ControlModifier):       # Ctrl: no snapping (Alt now copies, as in Illustrator)
                 for q in (r.topLeft(), r.center(), r.bottomRight()):
                     s = v.snap_pt(q + d, exclude=v.selected())
                     ax, ay = s.x() - (q.x() + d.x()), s.y() - (q.y() + d.y())
@@ -261,6 +280,7 @@ class SelectTool(Tool):
             T = QTransform()
             T.translate(ax, ay); T.scale(sx, sy); T.translate(-ax, -ay)
             self.apply(T)
+            self.last_op = ("scale", sx, sy)
             return
         if self.mode == "rotate":
             c = self.r0.center()
@@ -272,6 +292,7 @@ class SelectTool(Tool):
             T = QTransform()
             T.translate(c.x(), c.y()); T.rotate(ang); T.translate(-c.x(), -c.y())
             self.apply(T)
+            self.last_op = ("rotate", ang)
 
     def release(self, p, e):
         v = self.v
@@ -287,7 +308,13 @@ class SelectTool(Tool):
             v.key_object = None if v.key_object is self.key_click else self.key_click
             v.message.emit("Key object set: Align moves the others to it" if v.key_object else "Key object cleared")
         if self.mode in ("move", "scale", "rotate") and self.moved:
-            v.commit({"move": "Move", "scale": "Resize", "rotate": "Rotate"}[self.mode])
+            if self.mode == "move":
+                self.last_op = ("move", self.last_T.dx(), self.last_T.dy())
+            v.last_transform = self.last_op + (("copy",) if self.copied else ())   # for Transform again (Ctrl+D)
+            if self.copied:
+                from .ops import normalize_z
+                normalize_z(v)
+            v.commit({"move": "Copy" if self.copied else "Move", "scale": "Resize", "rotate": "Rotate"}[self.mode])
         self.mode = None
         self.orig = []
 

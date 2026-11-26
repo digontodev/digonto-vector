@@ -251,7 +251,7 @@ class Main(QMainWindow):
         section("History", self.history)
         section("Layers", self.layers_panel)
         section("Align", self._panel_align())
-        section("Shaping", self._panel_shaping())
+        section("Pathfinder", self._panel_shaping())
         section("Effects", self._panel_effects())
         self.stack.restore()
         ui.shrinkable(self.stack)
@@ -396,6 +396,55 @@ class Main(QMainWindow):
         l.addStretch()
         return w
 
+    def transform_dialog(self, kind):
+        """Object > Transform > Move / Rotate / Reflect / Scale, as in Illustrator: OK transforms, Copy transforms a copy"""
+        if not self.v.selected():
+            self.v.message.emit("Select something first")
+            return
+        d = QDialog(self); d.setWindowTitle({"move": "Move", "rotate": "Rotate", "reflect": "Reflect", "scale": "Scale"}[kind])
+        f = QFormLayout(d)
+        w = {}
+        def spin(lo, hi, val, suf, dec=2):
+            sb = QDoubleSpinBox(); sb.setRange(lo, hi); sb.setDecimals(dec); sb.setValue(val); sb.setSuffix(suf); return sb
+        if kind == "move":
+            w["h"] = spin(-100000, 100000, 0, " mm"); w["v"] = spin(-100000, 100000, 0, " mm")
+            f.addRow("Horizontal", w["h"]); f.addRow("Vertical", w["v"])
+        elif kind == "rotate":
+            w["a"] = spin(-360, 360, 45, "°"); f.addRow("Angle", w["a"])
+        elif kind == "reflect":
+            w["axis"] = QComboBox(); w["axis"].addItems(["Vertical axis (left ↔ right)", "Horizontal axis (top ↕ bottom)", "Angle"])
+            w["a"] = spin(-360, 360, 45, "°"); f.addRow("Axis", w["axis"]); f.addRow("Angle", w["a"])
+        else:
+            w["uni"] = QCheckBox("Uniform"); w["uni"].setChecked(True)
+            w["s"] = spin(0.01, 100000, 100, " %"); w["sh"] = spin(0.01, 100000, 100, " %"); w["sv"] = spin(0.01, 100000, 100, " %")
+            f.addRow("", w["uni"]); f.addRow("Scale", w["s"]); f.addRow("Horizontal", w["sh"]); f.addRow("Vertical", w["sv"])
+            def upd():
+                for k in ("sh", "sv"):
+                    w[k].setEnabled(not w["uni"].isChecked())
+                w["s"].setEnabled(w["uni"].isChecked())
+            w["uni"].toggled.connect(upd); upd()
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        cp = bb.addButton("Copy", QDialogButtonBox.ActionRole)
+        f.addRow(bb)
+        res = {"copy": False}
+        bb.accepted.connect(d.accept); bb.rejected.connect(d.reject)
+        cp.clicked.connect(lambda: (res.__setitem__("copy", True), d.accept()))
+        if d.exec() != QDialog.Accepted:
+            return
+        from vkit.model import PX_PER_MM
+        if kind == "move":
+            op = ("move", w["h"].value() * PX_PER_MM, w["v"].value() * PX_PER_MM)
+        elif kind == "rotate":
+            op = ("rotate", -w["a"].value())              # positive = anticlockwise, as in Illustrator
+        elif kind == "reflect":
+            op = ("reflect", [90.0, 0.0, -w["a"].value()][w["axis"].currentIndex()])
+        else:
+            if w["uni"].isChecked():
+                op = ("scale", w["s"].value() / 100, w["s"].value() / 100)
+            else:
+                op = ("scale", w["sh"].value() / 100, w["sv"].value() / 100)
+        ops.transform_op(self.v, op + (("copy",) if res["copy"] else ()))
+
     def do_align(self, mode):
         to = self.al_to.currentData()
         if to == "key" and self.v.key_object is None and len(self.v.selected()) > 1:
@@ -408,11 +457,14 @@ class Main(QMainWindow):
     def _panel_shaping(self):
         w = QWidget()
         l = QVBoxLayout(w)
-        _sl = QLabel("<b>Shaping</b> (select 2 or more shapes)"); _sl.setWordWrap(True); l.addWidget(_sl)
-        for t, tip, m in (("Weld", "Join into one shape", "weld"), ("Trim", "The shapes in front cut the shapes behind", "trim"),
-                          ("Intersect", "Keep only the overlapping part", "intersect"), ("Front minus back", "Bottom shape minus the ones above it", "front_minus_back"),
-                          ("Back minus front", "Top shape minus the ones below it", "back_minus_front")):
-            b = QPushButton(t); b.setToolTip(tip); b.clicked.connect(lambda _=False, mm=m: ops.shaping(self.v, mm)); l.addWidget(b)
+        _sl = QLabel("<b>Pathfinder</b> (select 2 or more shapes)"); _sl.setWordWrap(True); l.addWidget(_sl)
+        grid = QGridLayout(); grid.setSpacing(4)
+        for i, (t, tip, m) in enumerate((("Unite", "Join into one shape", "weld"), ("Minus front", "The shapes in front cut away from the back shape", "front_minus_back"),
+                          ("Intersect", "Keep only the overlapping part", "intersect"), ("Exclude", "Remove the overlapping parts", "exclude"),
+                          ("Divide", "Cut into all separate pieces", "divide"), ("Trim", "Shapes in front cut the shapes behind; all stay", "trim"),
+                          ("Minus back", "The shapes behind cut away from the front shape", "back_minus_front"))):
+            b = QPushButton(t); b.setToolTip(tip); b.clicked.connect(lambda _=False, mm=m: ops.shaping(self.v, mm)); grid.addWidget(b, i // 2, i % 2)
+        l.addLayout(grid)
         l.addWidget(QLabel("<b>Curves</b>"))
         for t, fn in (("Combine (make holes)", lambda: ops.combine(self.v)), ("Break apart", lambda: ops.break_apart(self.v)),
                       ("Outline → object", lambda: ops.outline_to_object(self.v)), ("Text → curves", lambda: ops.to_curves(self.v))):
@@ -538,7 +590,7 @@ class Main(QMainWindow):
         self.act(em, "Copy", lambda: ops.copy_sel(v), "Ctrl+C")
         self.act(em, "Paste", lambda: ops.paste(v), "Ctrl+V")
         self.act(em, "Paste in place", lambda: ops.paste(v, True), "Ctrl+Shift+V")
-        self.act(em, "Duplicate", lambda: ops.duplicate(v), "Ctrl+D")
+        self.act(em, "Duplicate", lambda: ops.duplicate(v), "Ctrl+Alt+D")
         self.act(em, "Delete", lambda: ops.delete(v), "Del")
         em.addSeparator()
         self.act(em, "Select all", lambda: ops.select_all(v), "Ctrl+A")
@@ -570,13 +622,23 @@ class Main(QMainWindow):
         self.act(om, "Outline → object", lambda: ops.outline_to_object(v))
         self.act(om, "Text → curves (create outlines)", lambda: ops.to_curves(v), "Ctrl+Shift+O")
         tm = om.addMenu("Transform")
+        self.act(tm, "Transform again", lambda: ops.transform_again(v), "Ctrl+D")
+        tm.addSeparator()
+        self.act(tm, "Move…", lambda: self.transform_dialog("move"), "Ctrl+Shift+M")
+        self.act(tm, "Rotate…", lambda: self.transform_dialog("rotate"))
+        self.act(tm, "Reflect…", lambda: self.transform_dialog("reflect"))
+        self.act(tm, "Scale…", lambda: self.transform_dialog("scale"))
+        tm.addSeparator()
         self.act(tm, "Mirror left-right", lambda: ops.mirror(v, True))
         self.act(tm, "Mirror top-bottom", lambda: ops.mirror(v, False))
         self.act(tm, "Rotate 90° right", lambda: ops.rotate(v, 90))
         self.act(tm, "Rotate 90° left", lambda: ops.rotate(v, -90))
         self.act(tm, "Rotate 180°", lambda: ops.rotate(v, 180))
-        sm = mb.addMenu("&Shaping")
-        for t, m in (("Weld", "weld"), ("Trim", "trim"), ("Intersect", "intersect"), ("Front minus back", "front_minus_back"), ("Back minus front", "back_minus_front")):
+        sm = mb.addMenu("&Pathfinder")
+        for t, _tip, m in (("Unite", "Join into one shape", "weld"), ("Minus front", "The shapes in front cut away from the back shape", "front_minus_back"),
+                          ("Intersect", "Keep only the overlapping part", "intersect"), ("Exclude", "Remove the overlapping parts", "exclude"),
+                          ("Divide", "Cut into all separate pieces", "divide"), ("Trim", "Shapes in front cut the shapes behind; all stay", "trim"),
+                          ("Minus back", "The shapes behind cut away from the front shape", "back_minus_front")):
             self.act(sm, t, lambda mm=m: ops.shaping(v, mm))
 
         nm = mb.addMenu("&Node")
@@ -635,7 +697,7 @@ class Main(QMainWindow):
         wm.addAction(QAction("Show all panels", self, triggered=lambda: [x.setChecked(True) for x in wm.actions() if x.isCheckable()]))
 
         wm.addSeparator()
-        for title, key in (("Align", "Shift+F7"), ("Layers", "F7"), ("Colour", "F6"), ("Shaping", "Ctrl+Shift+F9"), ("Properties", "Ctrl+F8")):
+        for title, key in (("Align", "Shift+F7"), ("Layers", "F7"), ("Colour", "F6"), ("Pathfinder", "Ctrl+Shift+F9"), ("Properties", "Ctrl+F8")):
             if title in self.sections:
                 self.act(wm, f"Go to {title}", lambda t=title: self.show_panel(t), key)
 
@@ -1283,7 +1345,8 @@ class Main(QMainWindow):
         QMessageBox.information(self, "Quick tips",
                                 "• Colours: left-click a colour at the bottom for the fill, right-click for the outline.\n"
                                 "• Drag from a ruler to pull out a guide; objects snap to guides, other objects and the page.\n"
-                                "• Shaping (Weld, Trim, Intersect…) makes new shapes from overlapping ones.\n"
+                                "• Pathfinder (Unite, Minus front, Intersect, Exclude, Divide) makes new shapes from overlapping ones.\n"
+                                "• Alt + drag leaves a copy behind; Ctrl+D repeats the last move, rotate or scale (with or without copy).\n"
                                 "• Double-click a shape to edit its nodes. Double-click a line in node mode to add a node.\n"
                                 "• Hold Space and drag to move the view; mouse wheel zooms; Shift+wheel scrolls sideways.\n"
                                 "• Shortcuts are the same as Illustrator: V select, A direct select, P pen, M rectangle, L ellipse, T text, Ctrl+G group, Ctrl+8 compound path, Ctrl+2 lock, Ctrl+Y outline view.\n"
