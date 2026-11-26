@@ -53,7 +53,7 @@ def _text_origin(it):
     """for a text object whose outline is still the text: (x, y of the first baseline) - else None"""
     from .tools import text_path
     m = it.meta or {}
-    if it.kind != "text" or not m.get("text"):
+    if it.kind != "text" or not m.get("text") or m.get("on_path"):      # text along a path is written as its outlines
         return None
     ref = text_path(m)
     rb, cb = ref.boundingRect(), it.path().boundingRect()

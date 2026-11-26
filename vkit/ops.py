@@ -249,6 +249,32 @@ def _fill_area(item):
     return p
 
 
+def divide_pieces(paths, srcs):
+    """all separate pieces of overlapping shapes (back to front): [(path, source item)]; an overlap takes the front colour"""
+    pieces = []
+    for k, p in enumerate(paths):
+        nxt = []
+        rest = QPainterPath(p)
+        for q, src in pieces:
+            a, b = q.intersected(p), q.subtracted(p)
+            if not b.isEmpty():
+                nxt.append((b, src))
+            if not a.isEmpty():
+                nxt.append((a, srcs[k]))
+            rest = rest.subtracted(q)
+        if not rest.isEmpty():
+            nxt.append((rest, srcs[k]))
+        pieces = nxt
+    def area(pa):
+        tot = 0.0
+        for poly in pa.toFillPolygons():
+            pts = [poly[i] for i in range(poly.size())]
+            tot += abs(sum(pts[i].x() * pts[(i + 1) % len(pts)].y() - pts[(i + 1) % len(pts)].x() * pts[i].y() for i in range(len(pts)))) / 2
+        return tot
+    # slivers along shared edges are not pieces
+    return [(pa.simplified(), src) for pa, src in pieces if area(pa) > 1.0]
+
+
 def shaping(v, mode):
     s = flat(sel(v))
     if len(s) < 2:
@@ -281,20 +307,7 @@ def shaping(v, mode):
             r = r.united(p).subtracted(r.intersected(p))
         style = s[-1]
     elif mode == "divide":                  # cut into every separate piece; each keeps the colour of the shape it came from
-        pieces = []                         # (path, source item)
-        for k, p in enumerate(paths):
-            nxt = []
-            rest = QPainterPath(p)
-            for q, src in pieces:
-                a, b = q.intersected(p), q.subtracted(p)
-                if not b.isEmpty():
-                    nxt.append((b, src))
-                if not a.isEmpty():
-                    nxt.append((a, s[k]))       # the overlap takes the front shape's colour
-                rest = rest.subtracted(q)
-            if not rest.isEmpty():
-                nxt.append((rest, s[k]))
-            pieces = nxt
+        pieces = divide_pieces(paths, s)
         z = max(x.zValue() for x in sel(v))
         lay = layer_of(s[-1])
         for x in sel(v):
@@ -674,13 +687,17 @@ def blend(v, steps):
     v.commit("Blend")
 
 
-def round_corners(v, radius_mm):
-    """round the straight corners of the selected shapes (like Corel's Fillet / Scallop tool)"""
+def round_corners(v, radius_mm, originals=None, commit=True):
+    """round the straight corners of the selected shapes (Live corners: pass the original paths to redo it from them)"""
     from .nodes import Node, Sub, path_from_subs, subs_from_path
     r0 = radius_mm * PX_PER_MM
     c = 0.5523
     done = 0
     for lf in flat(sel(v)):
+        if originals is not None and id(lf) in originals:
+            lf.set_path(originals[id(lf)])
+        if r0 <= 0:
+            continue
         subs = subs_from_path(lf.path())
         for sb in subs:
             ns = sb.nodes
@@ -708,10 +725,13 @@ def round_corners(v, radius_mm):
                 done += 1
             sb.nodes = out
         lf.set_path(path_from_subs(subs, lf.path().fillRule()))
+    if not commit:
+        return done
     if done:
         v.commit("Round corners")
     else:
         v.message.emit("No straight corners to round")
+    return done
 
 
 def skew(v, ax_deg, ay_deg):
@@ -750,3 +770,38 @@ def trace_file(v, path, **kw):
     else:
         v.commit("Image trace")
     return len(items)
+
+
+def text_on_path(v):
+    """Type on a path (as in Illustrator): select a text and a path; the text runs along the path, still editable"""
+    from .tools import path_to_list, text_path
+    s = sel(v)
+    texts = [i for i in s if isinstance(i, VItem) and i.kind == "text"]
+    paths = [i for i in s if isinstance(i, VItem) and i.kind != "text"]
+    if len(texts) != 1 or len(paths) != 1:
+        v.message.emit("Select one text and one path (line, curve or shape)")
+        return False
+    t, p = texts[0], paths[0]
+    if t.meta.get("on_path"):
+        v.message.emit("This text already runs along a path")
+        return False
+    t.meta["on_path"] = path_to_list(p.path())
+    t.meta["path_start"] = 0.0
+    t.meta.pop("angle", None)
+    t.set_path(text_path(t.meta))
+    v.commit("Text on path")
+    return True
+
+
+def text_off_path(v):
+    """the text goes back to a normal straight line"""
+    from .tools import text_path
+    s = [i for i in sel(v) if isinstance(i, VItem) and i.kind == "text" and i.meta.get("on_path")]
+    if not s:
+        return False
+    for t in s:
+        org = geom_rect(t).bottomLeft()
+        t.meta.pop("on_path", None); t.meta.pop("path_start", None)
+        t.set_path(text_path(t.meta, org))
+    v.commit("Text off path")
+    return True

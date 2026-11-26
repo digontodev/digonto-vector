@@ -41,11 +41,60 @@ def hit_item(v, pos, tol_px=5):
     return None
 
 
+def path_to_list(pa):
+    """a QPainterPath as a plain list (for saving): [[type, x, y], ...]"""
+    return [[pa.elementAt(i).type.value if hasattr(pa.elementAt(i).type, "value") else int(pa.elementAt(i).type),
+             round(pa.elementAt(i).x, 3), round(pa.elementAt(i).y, 3)] for i in range(pa.elementCount())]
+
+
+def path_from_list(lst):
+    pa = QPainterPath()
+    i = 0
+    while i < len(lst):
+        t, x, y = lst[i]
+        if t == 0:
+            pa.moveTo(x, y)
+        elif t == 1:
+            pa.lineTo(x, y)
+        elif t == 2 and i + 2 < len(lst):
+            pa.cubicTo(x, y, lst[i + 1][1], lst[i + 1][2], lst[i + 2][1], lst[i + 2][2])
+            i += 2
+        i += 1
+    return pa
+
+
+def _text_along(meta, f):
+    """the letters set one by one along a path (type on a path, as in Illustrator)"""
+    from PySide6.QtGui import QFontMetricsF
+    guide = path_from_list(meta["on_path"])
+    total = guide.length()
+    fm = QFontMetricsF(f)
+    out = QPainterPath()
+    s = float(meta.get("path_start", 0.0)) * total
+    shift = -fm.ascent() * 0.0 + float(meta.get("baseline_shift", 0.0))
+    for ch in meta.get("text", "").replace("\n", " "):
+        adv = fm.horizontalAdvance(ch)
+        mid = s + adv / 2
+        if mid > total:
+            break
+        t = guide.percentAtLength(mid)
+        pt, ang = guide.pointAtPercent(t), guide.angleAtPercent(t)
+        g = QPainterPath()
+        g.addText(-adv / 2, shift, f, ch)
+        out.addPath(QTransform().translate(pt.x(), pt.y()).rotate(-ang).map(g))
+        s += adv
+    return out
+
+
 def text_path(meta, origin=QPointF(0, 0)):
     f = QFont(meta.get("family", "Sans Serif"))
     f.setPixelSize(max(1, int(round(meta.get("size", 48)))))
     f.setBold(meta.get("bold", False))
     f.setItalic(meta.get("italic", False))
+    if meta.get("on_path"):
+        p = _text_along(meta, f)
+        p.translate(origin)
+        return p
     p = QPainterPath()
     lh = QFontMetricsF_height(f)
     for i, line in enumerate(meta.get("text", "").split("\n")):
@@ -1049,6 +1098,95 @@ class EyedropperTool(Tool):
             self.v.commit("Copy style")
         self.v.message.emit("Style picked" + (" and applied" if targets else ""))
         self.v.toolRequest.emit("_style_changed")
+
+
+class ShapeBuilderTool(Tool):
+    """Shape Builder (Shift+M, as in Illustrator): select overlapping shapes, then drag across pieces to join them
+    into one shape; Alt + click (or drag) removes pieces. Every other piece stays a shape of its own."""
+    cursor = Qt.CrossCursor
+
+    def activate(self):
+        self.pieces, self.picked, self.hover, self.dragging = [], [], None, False
+        self.rebuild()
+
+    def rebuild(self):
+        from .ops import divide_pieces, flat
+        items = [i for i in flat(self.v.selected()) if isinstance(i, VItem) and i.kind != "text"]
+        self.items = items
+        self.pieces = divide_pieces([i.path() for i in items], items) if len(items) >= 2 else []
+        if len(items) < 2:
+            self.v.message.emit("Shape Builder: first select two or more overlapping shapes")
+        self.v.viewport().update()
+
+    def _at(self, p):
+        for k in range(len(self.pieces) - 1, -1, -1):
+            if self.pieces[k][0].contains(p):
+                return k
+        return None
+
+    def press(self, p, e):
+        if not self.pieces:
+            self.rebuild()
+        self.remove = bool(e.modifiers() & Qt.AltModifier)
+        self.dragging = True
+        k = self._at(p)
+        self.picked = [k] if k is not None else []
+        self.v.viewport().update()
+
+    def move(self, p, e):
+        k = self._at(p)
+        self.hover = k
+        if self.dragging and k is not None and k not in self.picked:
+            self.picked.append(k)
+        self.v.viewport().update()
+
+    def release(self, p, e):
+        if not self.dragging:
+            return
+        self.dragging = False
+        v = self.v
+        if not self.picked:
+            return
+        from .ops import normalize_z, select
+        z = max(i.zValue() for i in self.items)
+        lay = self.items[-1].layer if hasattr(self.items[-1], "layer") else None
+        for i in self.items:
+            if i.scene() is v.scene_:
+                v.scene_.removeItem(i)
+        new = []
+        joined = QPainterPath()
+        for k in self.picked:
+            joined = joined.united(self.pieces[k][0])
+        src0 = self.pieces[self.picked[0]][1]
+        for k, (pa, src) in enumerate(self.pieces):
+            if k in self.picked:
+                continue
+            n = VItem(pa, dict(src.fill), dict(src.stroke)); n.layer = lay; new.append(n)
+        if not self.remove:
+            n = VItem(joined.simplified(), dict(src0.fill), dict(src0.stroke)); n.layer = lay; new.append(n)
+        for k, n in enumerate(new):
+            n.setZValue(z + k * 1e-3)
+            v.scene_.addItem(n)
+        normalize_z(v)
+        select(v, new)
+        v.commit("Shape builder: remove" if self.remove else "Shape builder: join")
+        self.picked = []
+        self.rebuild()
+
+    def paint(self, pt, z):
+        if not self.pieces:
+            return
+        pt.setBrush(Qt.NoBrush)
+        pt.setPen(QPen(BLUE, 0, Qt.DotLine))
+        for pa, _src in self.pieces:
+            pt.drawPath(pa)
+        show = list(self.picked) + ([self.hover] if self.hover is not None and not self.dragging else [])
+        col = QColor(220, 40, 60, 90) if getattr(self, "remove", False) and self.dragging else QColor(45, 108, 223, 80)
+        for k in show:
+            if 0 <= k < len(self.pieces):
+                pt.setBrush(col)
+                pt.setPen(QPen(BLUE, 0))
+                pt.drawPath(self.pieces[k][0])
 
 
 class ArtboardTool(Tool):

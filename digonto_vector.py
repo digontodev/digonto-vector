@@ -19,7 +19,7 @@ from vkit import __version__ as VERSION
 from vkit import ops
 from vkit.model import PX_PER_MM, VGroup, VItem, geom_rect, layers_from, load_into, leaves_of, top_level, union_rect
 from vkit.svgio import export_svg, import_svg
-from vkit.tools import (ArtboardTool, EyedropperTool, HandTool, NodeTool, PencilTool, PenTool, SelectTool, ShapeTool, TextTool, ZoomTool)
+from vkit.tools import (ShapeBuilderTool, ArtboardTool, EyedropperTool, HandTool, NodeTool, PencilTool, PenTool, SelectTool, ShapeTool, TextTool, ZoomTool)
 from vkit.panels import ColourPanel, HistoryPanel, LayersPanel, Navigator
 from vkit.view import VectorView
 from vkit.widgets import Palette, Ruler, tool_icon
@@ -42,6 +42,8 @@ HINTS = {
     "eyedropper": "Click an object to copy its colours onto the selected objects.",
     "zoom": "Click to zoom in, right-click to zoom out, drag a box to zoom to it.",
     "hand": "Drag to move the view. (Hold Space with any tool.)",
+    "shapebuilder": "Select overlapping shapes first. Drag across pieces to join them; Alt + click or drag removes pieces.",
+    "artboard": "Click an artboard to make it active, drag it to move it with its artwork, drag on empty space for a new one. Delete removes it.",
 }
 
 
@@ -119,7 +121,8 @@ class Main(QMainWindow):
         for name, tool in (("select", SelectTool(v)), ("node", NodeTool(v)), ("pen", PenTool(v)), ("rect", ShapeTool(v, "rect")),
                            ("ellipse", ShapeTool(v, "ellipse")), ("polygon", ShapeTool(v, "polygon")), ("star", ShapeTool(v, "star")),
                            ("line", ShapeTool(v, "line")), ("pencil", PencilTool(v)), ("text", TextTool(v)),
-                           ("eyedropper", EyedropperTool(v)), ("zoom", ZoomTool(v)), ("hand", HandTool(v)), ("artboard", ArtboardTool(v))):
+                           ("eyedropper", EyedropperTool(v)), ("zoom", ZoomTool(v)), ("hand", HandTool(v)), ("artboard", ArtboardTool(v)),
+                           ("shapebuilder", ShapeBuilderTool(v))):
             v.register(name, tool)
         self._build_ui()
         self._build_menus()
@@ -216,7 +219,7 @@ class Main(QMainWindow):
         for name, label, key in (("select", "Select", "V"), ("node", "Node edit (direct select)", "A"), ("pen", "Pen (curves)", "P"),
                                  ("rect", "Rectangle", "M"), ("ellipse", "Ellipse", "L"), ("polygon", "Polygon", "Y"), ("star", "Star", "S"),
                                  ("line", "Line", "\\"), ("pencil", "Pencil (freehand)", "N"), ("text", "Text", "T"), ("eyedropper", "Eyedropper", "I"),
-                                 ("artboard", "Artboard", "Shift+O"), ("zoom", "Zoom", "Z"), ("hand", "Hand (or hold Space)", "H")):
+                                 ("shapebuilder", "Shape Builder", "Shift+M"), ("artboard", "Artboard", "Shift+O"), ("zoom", "Zoom", "Z"), ("hand", "Hand (or hold Space)", "H")):
             a = QAction(tool_icon(name), label, self)
             a.setCheckable(True)
             a.setShortcut(key)
@@ -534,10 +537,15 @@ class Main(QMainWindow):
         b = QPushButton("Blend two objects"); b.setToolTip("Makes copies between the lowest and the highest selected object")
         b.clicked.connect(lambda: ops.blend(self.v, self.bl_n.value())); l.addWidget(b)
         fr = QFormLayout()
-        self.rc_r = self._spin(0.1, 200, 4, 0.5, 1, " mm")
-        fr.addRow("Corner radius", self.rc_r)
+        self.rc_r = self._spin(0.0, 200, 0, 0.5, 1, " mm")
+        self.rc_r.setToolTip("Live corners: the corners of the selected shapes round while you change the value")
+        fr.addRow("Corners (live)", self.rc_r)
         l.addLayout(fr)
-        b = QPushButton("Round corners"); b.clicked.connect(lambda: ops.round_corners(self.v, self.rc_r.value())); l.addWidget(b)
+        self._rc_orig, self._rc_sel = {}, None
+        self._rc_timer = QTimer(self); self._rc_timer.setSingleShot(True); self._rc_timer.setInterval(700)
+        self._rc_timer.timeout.connect(self._live_corners_commit)
+        self.rc_r.valueChanged.connect(self._live_corners)
+        self.v.selectionChanged2.connect(self._rc_reset)
         b = QPushButton("Trace image…"); b.setToolTip("Turn a picture (logo, scan, drawing) into vector shapes")
         b.clicked.connect(self.trace_dialog); l.addWidget(b)
         l.addStretch()
@@ -623,6 +631,8 @@ class Main(QMainWindow):
         self.act(om, "Round corners", lambda: ops.round_corners(v, self.rc_r.value()))
         self.act(om, "Trace image…", self.trace_dialog)
         self.act(om, "Outline → object", lambda: ops.outline_to_object(v))
+        self.act(om, "Text on path", lambda: ops.text_on_path(v))
+        self.act(om, "Text off path (straight again)", lambda: ops.text_off_path(v))
         self.act(om, "Text → curves (create outlines)", lambda: ops.to_curves(v), "Ctrl+Shift+O")
         tm = om.addMenu("Transform")
         self.act(tm, "Transform again", lambda: ops.transform_again(v), "Ctrl+D")
@@ -1102,6 +1112,28 @@ class Main(QMainWindow):
             else:
                 self._add_tab(d.w.value(), d.h.value())
             self.show_work()
+
+    # ------------------------------------------------------------------ live corners
+    def _live_corners(self, val):
+        v = self.v
+        sel = tuple(id(i) for i in v.selected())
+        if not sel:
+            return
+        if sel != self._rc_sel:                       # a new selection: remember its paths as they are now
+            self._rc_sel = sel
+            self._rc_orig = {id(lf): lf.path() for lf in ops.flat(v.selected())}
+        ops.round_corners(v, val, originals=self._rc_orig, commit=False)
+        v.viewport().update()
+        self._rc_timer.start()
+
+    def _rc_reset(self):
+        if tuple(id(i) for i in self.v.selected()) != self._rc_sel:
+            self._rc_sel = None
+            self.rc_r.blockSignals(True); self.rc_r.setValue(0); self.rc_r.blockSignals(False)
+
+    def _live_corners_commit(self):
+        if self._rc_sel:
+            self.v.commit("Round corners")
 
     # ------------------------------------------------------------------ artboards
     def _panel_artboards(self):

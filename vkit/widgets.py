@@ -241,6 +241,10 @@ def tool_icon(name):
         p.drawLine(8, 24, 18, 14)
         p.setBrush(QColor("#FFFFFF")); p.drawPolygon(QPolygonF([QPointF(5, 27), QPointF(8, 20), QPointF(12, 24)]))
         p.save(); p.translate(21, 11); p.rotate(45); p.setBrush(green); p.drawRoundedRect(QRectF(-3, -8, 6, 16), 2, 2); p.restore()
+    elif name == "shapebuilder":
+        p.setBrush(QColor("white")); p.drawEllipse(QPointF(12, 15), 8, 8); p.drawEllipse(QPointF(20, 15), 8, 8)
+        p.setPen(QPen(green, 2)); p.drawLine(QPointF(6, 26), QPointF(26, 26))
+        p.setBrush(green); p.drawEllipse(QPointF(26, 26), 2.4, 2.4)
     elif name == "artboard":
         p.setBrush(QColor("white")); p.drawRect(QRectF(9, 9, 14, 14))
         for a, b in (((9, 3), (9, 7)), ((23, 25), (23, 29)), ((3, 9), (7, 9)), ((25, 23), (29, 23))):
