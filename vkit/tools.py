@@ -1051,6 +1051,74 @@ class EyedropperTool(Tool):
         self.v.toolRequest.emit("_style_changed")
 
 
+class ArtboardTool(Tool):
+    """Artboard (Shift+O, as in Illustrator): click an artboard to make it active, drag it to move it with its
+    artwork, drag on empty space to draw a new one. Delete removes the active artboard (the artwork stays)."""
+    cursor = Qt.CrossCursor
+
+    def press(self, p, e):
+        v = self.v
+        self.a = self.b = QPointF(p)
+        self.dragging = True
+        i = v.page.index_at(p)
+        if i >= 0:
+            v.page.active = i
+            self.mode = "move"
+            r = v.page.rect_of(i)
+            self.items = [it for it in top_level(v.scene_) if r.contains(geom_rect(it).center()) and not it.is_locked()]
+            self.orig = (v.page.boards[i]["x"], v.page.boards[i]["y"])
+            self.snap = [(lf, lf.path()) for it in self.items for lf in (it.leaves() if isinstance(it, VGroup) else [it])]
+            v.message.emit(f"{v.page.boards[i]['name']} — drag to move it with its artwork")
+            v.layersChanged.emit()
+        else:
+            self.mode = "new"
+        v.viewport().update()
+
+    def move(self, p, e):
+        if not self.dragging:
+            return
+        self.b = QPointF(p)
+        if self.mode == "move":
+            d = self.b - self.a
+            b = self.v.page.board
+            b["x"], b["y"] = self.orig[0] + d.x() / PX_PER_MM, self.orig[1] + d.y() / PX_PER_MM
+            T = QTransform.fromTranslate(d.x(), d.y())
+            for lf, path in self.snap:                     # the artwork moves along
+                lf.set_path(T.map(path))
+        self.v.viewport().update()
+
+    def release(self, p, e):
+        if not self.dragging:
+            return
+        self.dragging = False
+        v = self.v
+        r = QRectF(self.a, self.b).normalized()
+        if self.mode == "new":
+            if r.width() * v.zoom_factor() > 10 and r.height() * v.zoom_factor() > 10:
+                v.page.add(r.width() / PX_PER_MM, r.height() / PX_PER_MM, r.x() / PX_PER_MM, r.y() / PX_PER_MM)
+                v.commit("New artboard")
+                v.layersChanged.emit()
+        elif (self.b - self.a).manhattanLength() > 0.5:
+            v.commit("Move artboard")
+        v.viewport().update()
+
+    def key(self, e):
+        v = self.v
+        if e.key() in (Qt.Key_Delete, Qt.Key_Backspace) and len(v.page.boards) > 1:
+            del v.page.boards[v.page.active]
+            v.page.active = max(0, v.page.active - 1)
+            v.commit("Delete artboard")
+            v.layersChanged.emit()
+            v.viewport().update()
+            return True
+        return False
+
+    def paint(self, pt, z):
+        if self.dragging and self.mode == "new":
+            pt.setPen(QPen(BLUE, 0, Qt.DashLine)); pt.setBrush(Qt.NoBrush)
+            pt.drawRect(QRectF(self.a, self.b).normalized())
+
+
 class ZoomTool(Tool):
     cursor = Qt.CrossCursor
 

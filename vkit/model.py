@@ -275,17 +275,82 @@ def scene_rect_of(item):
 
 # ---------------------------------------------------------------- document
 class Page:
+    """the artboards of the document (as in Illustrator). Everything that asks for "the page" (align to page,
+    export, page size, fit) works on the active artboard."""
+    GAP_MM = 20.0
+
     def __init__(self, w_mm=210.0, h_mm=297.0):
-        self.w_mm, self.h_mm = w_mm, h_mm
+        self.boards = [dict(name="Artboard 1", x=0.0, y=0.0, w=float(w_mm), h=float(h_mm))]
+        self.active = 0
+
+    @property
+    def board(self):
+        self.active = max(0, min(self.active, len(self.boards) - 1))
+        return self.boards[self.active]
+
+    @property
+    def w_mm(self):
+        return self.board["w"]
+
+    @w_mm.setter
+    def w_mm(self, v):
+        self.board["w"] = float(v)
+
+    @property
+    def h_mm(self):
+        return self.board["h"]
+
+    @h_mm.setter
+    def h_mm(self, v):
+        self.board["h"] = float(v)
+
+    def rect_of(self, i):
+        b = self.boards[i]
+        return QRectF(b["x"] * PX_PER_MM, b["y"] * PX_PER_MM, b["w"] * PX_PER_MM, b["h"] * PX_PER_MM)
 
     @property
     def rect(self):
-        return QRectF(0, 0, self.w_mm * PX_PER_MM, self.h_mm * PX_PER_MM)
+        self.board
+        return self.rect_of(self.active)
+
+    def index_at(self, p):
+        for i in range(len(self.boards) - 1, -1, -1):
+            if self.rect_of(i).contains(p):
+                return i
+        return -1
+
+    def add(self, w=None, h=None, x=None, y=None, name=None):
+        """a new artboard, by default the size of the active one, to the right of all others"""
+        w = float(w if w is not None else self.w_mm)
+        h = float(h if h is not None else self.h_mm)
+        if x is None:
+            x = max(b["x"] + b["w"] for b in self.boards) + self.GAP_MM
+            y = min(b["y"] for b in self.boards)
+        n = 1
+        names = {b["name"] for b in self.boards}
+        while f"Artboard {n}" in names:
+            n += 1
+        self.boards.append(dict(name=name or f"Artboard {n}", x=float(x), y=float(y), w=w, h=h))
+        self.active = len(self.boards) - 1
+        return self.active
+
+    def to_json(self):
+        return {"boards": [dict(b) for b in self.boards], "active": self.active}
+
+    @staticmethod
+    def from_json(data):
+        p = Page(*data.get("page", [210, 297]))
+        if data.get("boards"):
+            p.boards = [dict(name=b.get("name", f"Artboard {i + 1}"), x=float(b.get("x", 0)), y=float(b.get("y", 0)),
+                             w=float(b["w"]), h=float(b["h"])) for i, b in enumerate(data["boards"])]
+            p.active = int(data.get("active_board", 0))
+        return p
 
 
 def dump_scene(scene, page, guides, layers=None):
     items = [i.to_json() for i in scene.items(order=Qt.AscendingOrder) if i.group() is None and isinstance(i, (VItem, VGroup))]
-    return {"app": "digonto-vector", "version": 1, "page": [page.w_mm, page.h_mm], "items": items, "guides": guides, "layers": layers}
+    return {"app": "digonto-vector", "version": 1, "page": [page.boards[0]["w"], page.boards[0]["h"]], "boards": [dict(b) for b in page.boards],
+            "active_board": page.active, "items": items, "guides": guides, "layers": layers}
 
 
 def load_into(scene, data):
@@ -294,7 +359,7 @@ def load_into(scene, data):
             scene.removeItem(i)
     for d in data.get("items", []):
         scene.addItem(item_from_json(d))
-    return Page(*data.get("page", [210, 297])), data.get("guides", {"h": [], "v": []})
+    return Page.from_json(data), data.get("guides", {"h": [], "v": []})
 
 
 DEFAULT_LAYERS = [{"id": "L1", "name": "Layer 1", "visible": True, "locked": False}]

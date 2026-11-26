@@ -270,9 +270,19 @@ class VectorView(QGraphicsView):
     # ------------------------------------------------------------ drawing
     def drawBackground(self, p, rect):
         super().drawBackground(p, rect)
+        z = self.zoom_factor()
+        many = len(self.page.boards) > 1
+        for i in range(len(self.page.boards)):          # every artboard: white with a shadow, its name above it
+            r = self.page.rect_of(i)
+            p.fillRect(r.translated(5 / z, 5 / z), QColor(0, 0, 0, 70))
+            p.fillRect(r, QColor("#FFFFFF"))
+            if many:
+                f = p.font(); f.setPixelSize(max(1, int(12 / z))); p.setFont(f)
+                p.setPen(QPen(QColor("#2D6CDF") if i == self.page.active else QColor(90, 90, 90), 0))
+                p.drawText(QPointF(r.left(), r.top() - 5 / z), self.page.boards[i]["name"])
+                if i != self.page.active:
+                    p.setPen(QPen(QColor(0, 0, 0, 90), 0)); p.setBrush(Qt.NoBrush); p.drawRect(r)
         pr = self.page.rect
-        p.fillRect(pr.translated(5 / self.zoom_factor(), 5 / self.zoom_factor()), QColor(0, 0, 0, 70))
-        p.fillRect(pr, QColor("#FFFFFF"))
         if self.grid["show"]:
             g = self.grid["mm"] * PX_PER_MM
             if g * self.zoom_factor() >= 5:
@@ -283,7 +293,7 @@ class VectorView(QGraphicsView):
                 y = math.ceil(pr.top() / g) * g
                 while y <= pr.bottom():
                     p.drawLine(QPointF(pr.left(), y), QPointF(pr.right(), y)); y += g
-        p.setPen(QPen(QColor(0, 0, 0, 90), 0))
+        p.setPen(QPen(QColor("#2D6CDF") if many else QColor(0, 0, 0, 90), (2 / z) if many else 0))
         p.setBrush(Qt.NoBrush)
         p.drawRect(pr)
 

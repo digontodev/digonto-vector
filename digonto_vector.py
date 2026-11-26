@@ -8,7 +8,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 from PySide6.QtCore import QMarginsF, QPointF, QRectF, QSettings, QSize, QSizeF, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QImage, QPageSize, QPainter, QPdfWriter
+from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QImage, QPageSize, QPainter, QPdfWriter, QTransform
 from PySide6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox, QDockWidget,
                                QDoubleSpinBox, QFileDialog, QFontComboBox, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
                                QInputDialog, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QTabBar,
@@ -19,7 +19,7 @@ from vkit import __version__ as VERSION
 from vkit import ops
 from vkit.model import PX_PER_MM, VGroup, VItem, geom_rect, layers_from, load_into, leaves_of, top_level, union_rect
 from vkit.svgio import export_svg, import_svg
-from vkit.tools import (EyedropperTool, HandTool, NodeTool, PencilTool, PenTool, SelectTool, ShapeTool, TextTool, ZoomTool)
+from vkit.tools import (ArtboardTool, EyedropperTool, HandTool, NodeTool, PencilTool, PenTool, SelectTool, ShapeTool, TextTool, ZoomTool)
 from vkit.panels import ColourPanel, HistoryPanel, LayersPanel, Navigator
 from vkit.view import VectorView
 from vkit.widgets import Palette, Ruler, tool_icon
@@ -119,7 +119,7 @@ class Main(QMainWindow):
         for name, tool in (("select", SelectTool(v)), ("node", NodeTool(v)), ("pen", PenTool(v)), ("rect", ShapeTool(v, "rect")),
                            ("ellipse", ShapeTool(v, "ellipse")), ("polygon", ShapeTool(v, "polygon")), ("star", ShapeTool(v, "star")),
                            ("line", ShapeTool(v, "line")), ("pencil", PencilTool(v)), ("text", TextTool(v)),
-                           ("eyedropper", EyedropperTool(v)), ("zoom", ZoomTool(v)), ("hand", HandTool(v))):
+                           ("eyedropper", EyedropperTool(v)), ("zoom", ZoomTool(v)), ("hand", HandTool(v)), ("artboard", ArtboardTool(v))):
             v.register(name, tool)
         self._build_ui()
         self._build_menus()
@@ -216,7 +216,7 @@ class Main(QMainWindow):
         for name, label, key in (("select", "Select", "V"), ("node", "Node edit (direct select)", "A"), ("pen", "Pen (curves)", "P"),
                                  ("rect", "Rectangle", "M"), ("ellipse", "Ellipse", "L"), ("polygon", "Polygon", "Y"), ("star", "Star", "S"),
                                  ("line", "Line", "\\"), ("pencil", "Pencil (freehand)", "N"), ("text", "Text", "T"), ("eyedropper", "Eyedropper", "I"),
-                                 ("zoom", "Zoom", "Z"), ("hand", "Hand (or hold Space)", "H")):
+                                 ("artboard", "Artboard", "Shift+O"), ("zoom", "Zoom", "Z"), ("hand", "Hand (or hold Space)", "H")):
             a = QAction(tool_icon(name), label, self)
             a.setCheckable(True)
             a.setShortcut(key)
@@ -250,6 +250,7 @@ class Main(QMainWindow):
         section("Colour", self.colour)
         section("History", self.history)
         section("Layers", self.layers_panel)
+        section("Artboards", self._panel_artboards())
         section("Align", self._panel_align())
         section("Pathfinder", self._panel_shaping())
         section("Effects", self._panel_effects())
@@ -576,8 +577,10 @@ class Main(QMainWindow):
         self.act(em, "PDF…", lambda: self.export("pdf"))
         self.act(em, "EPS (Illustrator, Inkscape)…", lambda: self.export("eps"))
         self.act(em, "AI (Adobe Illustrator)…", lambda: self.export("ai"))
+        self.act(em, "All artboards…", self.export_artboards, "Ctrl+Alt+E")
         fm.addSeparator()
-        self.act(fm, "Page size…", self.page_setup)
+        self.act(fm, "Page size (active artboard)…", self.page_setup)
+        self.act(fm, "New artboard", self.add_artboard)
         fm.addSeparator()
         fm.addAction(QAction("Exit", self, shortcut="Ctrl+Q", triggered=self.close))
         fm.addAction(QAction("Quit (force)", self, shortcut="Ctrl+Shift+Q", triggered=lambda: os._exit(0)))
@@ -1100,11 +1103,142 @@ class Main(QMainWindow):
                 self._add_tab(d.w.value(), d.h.value())
             self.show_work()
 
+    # ------------------------------------------------------------------ artboards
+    def _panel_artboards(self):
+        w = QWidget()
+        l = QVBoxLayout(w)
+        l.setContentsMargins(6, 4, 6, 4)
+        self.ab_list = QListWidget()
+        self.ab_list.setMaximumHeight(130)
+        self.ab_list.currentRowChanged.connect(self._ab_pick)
+        self.ab_list.itemDoubleClicked.connect(lambda _it: self._ab_rename())
+        l.addWidget(self.ab_list)
+        row = QHBoxLayout()
+        for t, fn, tip in (("+", self.add_artboard, "New artboard (same size, to the right)"), ("Copy", self.duplicate_artboard, "Duplicate the artboard with its artwork"),
+                           ("Rename", self._ab_rename, "Rename"), ("Size…", self.page_setup, "Size of the active artboard"),
+                           ("✕", self.delete_artboard, "Delete the artboard (the artwork stays)")):
+            b = QPushButton(t); b.setToolTip(tip); b.clicked.connect(fn); row.addWidget(b)
+        l.addLayout(row)
+        tip = QLabel("Shift+O: draw a new artboard, or drag one to move it with its artwork.")
+        tip.setWordWrap(True); tip.setStyleSheet("color:#6A7A72;")
+        l.addWidget(tip)
+        self.v.layersChanged.connect(self._ab_fill)
+        self.v.docChanged.connect(self._ab_fill)
+        self._ab_fill()
+        return w
+
+    def _ab_fill(self):
+        if not hasattr(self, "ab_list"):
+            return
+        pg = self.v.page
+        self.ab_list.blockSignals(True)
+        self.ab_list.clear()
+        for b in pg.boards:
+            self.ab_list.addItem(f"{b['name']}   {b['w']:g} × {b['h']:g} mm")
+        self.ab_list.setCurrentRow(pg.active)
+        self.ab_list.blockSignals(False)
+
+    def _ab_pick(self, row):
+        if 0 <= row < len(self.v.page.boards):
+            self.v.page.active = row
+            self.v.fit_page()
+            self.v.viewport().update()
+
+    def add_artboard(self):
+        self.v.page.add()
+        self.v.commit("New artboard")
+        self._ab_fill(); self.v.fit_page()
+
+    def duplicate_artboard(self):
+        v = self.v
+        src = v.page.rect
+        v.page.add()
+        d = v.page.rect.topLeft() - src.topLeft()
+        from vkit.model import item_from_json
+        T = QTransform.fromTranslate(d.x(), d.y())
+        for it in [i for i in top_level(v.scene_) if src.contains(geom_rect(i).center())]:
+            n = item_from_json(it.to_json()); n.bake(T); v.scene_.addItem(n)
+        ops.normalize_z(v)
+        v.commit("Duplicate artboard")
+        self._ab_fill(); v.fit_page()
+
+    def delete_artboard(self):
+        pg = self.v.page
+        if len(pg.boards) < 2:
+            self.statusBar().showMessage("A document keeps at least one artboard", 3000)
+            return
+        del pg.boards[pg.active]
+        pg.active = max(0, pg.active - 1)
+        self.v.commit("Delete artboard")
+        self._ab_fill(); self.v.viewport().update()
+
+    def _ab_rename(self):
+        b = self.v.page.board
+        n, ok = QInputDialog.getText(self, "Artboard", "Name:", text=b["name"])
+        if ok and n.strip():
+            b["name"] = n.strip()
+            self.v.commit("Rename artboard")
+            self._ab_fill(); self.v.viewport().update()
+
+    def export_artboards(self):
+        """every artboard: one PDF with a page each, or one PNG / SVG file each"""
+        v = self.v
+        kind, ok = QInputDialog.getItem(self, "Export all artboards", "As:", ["PDF (one page per artboard)", "PNG (one file each)", "SVG (one file each)"], 0, False)
+        if not ok:
+            return
+        base = os.path.splitext(os.path.basename(v.path))[0] if v.path else "drawing"
+        keep = v.page.active
+        try:
+            if kind.startswith("PDF"):
+                p, _ = QFileDialog.getSaveFileName(self, "Export all artboards", f"{base}.pdf", "PDF (*.pdf)")
+                if not p:
+                    return
+                wr = QPdfWriter(p if p.lower().endswith(".pdf") else p + ".pdf")
+                wr.setResolution(300)
+                wr.setPageMargins(QMarginsF(0, 0, 0, 0))
+                pt = None
+                for i in range(len(v.page.boards)):
+                    v.page.active = i
+                    wr.setPageSize(QPageSize(QSizeF(v.page.w_mm, v.page.h_mm), QPageSize.Millimeter))
+                    if pt is None:
+                        pt = QPainter(wr); pt.setRenderHint(QPainter.Antialiasing)
+                    else:
+                        wr.newPage()
+                    self._render_scene(pt, QRectF(0, 0, wr.width(), wr.height()))
+                pt.end()
+                done = p
+            else:
+                folder = QFileDialog.getExistingDirectory(self, "Folder for the artboards")
+                if not folder:
+                    return
+                dpi = 150
+                if kind.startswith("PNG"):
+                    dpi, ok = QInputDialog.getInt(self, "PNG", "Resolution (dpi):", 150, 20, 1200)
+                    if not ok:
+                        return
+                for i, b in enumerate(v.page.boards):
+                    v.page.active = i
+                    safe = "".join(ch if ch.isalnum() or ch in " -_" else "_" for ch in b["name"]).strip() or f"artboard {i + 1}"
+                    if kind.startswith("PNG"):
+                        self.render_png(os.path.join(folder, f"{base} - {safe}.png"), dpi, False)
+                    else:
+                        with open(os.path.join(folder, f"{base} - {safe}.svg"), "w", encoding="utf-8") as fh:
+                            fh.write(export_svg(v.scene_, v.page, None, v.layers))
+                done = folder
+        except OSError as e:
+            QMessageBox.warning(self, APP_NAME, f"Could not export:\n{e}")
+            return
+        finally:
+            v.page.active = keep
+            v.viewport().update()
+        self.statusBar().showMessage(f"Exported {len(v.page.boards)} artboards to {done}", 6000)
+
     def page_setup(self):
         d = PageDialog(self, "Page size", self.v.page.w_mm, self.v.page.h_mm)
         if d.exec():
             self.v.page.w_mm, self.v.page.h_mm = d.w.value(), d.h.value()
             self.v.commit("Page size")
+            self._ab_fill()
             self.v.fit_page()
 
     def open_dialog(self):

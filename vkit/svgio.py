@@ -153,8 +153,9 @@ def export_svg(scene, page, items=None, layers=None):
             if it.isVisible():
                 emit(it, "  ")
     w, h = page.w_mm, page.h_mm
+    ox, oy = page.rect.x(), page.rect.y()                    # the active artboard
     return (f'<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="{INK}" xmlns:sodipodi="{SODI}" '
-            f'width="{w:g}mm" height="{h:g}mm" viewBox="0 0 {w * PX_PER_MM:.3f} {h * PX_PER_MM:.3f}">\n'
+            f'width="{w:g}mm" height="{h:g}mm" viewBox="{ox:.3f} {oy:.3f} {w * PX_PER_MM:.3f} {h * PX_PER_MM:.3f}">\n'
             + ("<defs>" + "".join(defs) + "</defs>\n" if defs else "")
             + "\n".join(body) + "\n</svg>\n")
 
