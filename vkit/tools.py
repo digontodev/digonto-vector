@@ -383,7 +383,9 @@ class SelectTool(Tool):
         nodes; double-click on empty space goes back out one level"""
         v = self.v
         txt = hit_text(v, p)
-        if txt is not None and txt.group() is not None:    # a text, even deep in groups (table numbers ...): edit it at once
+        iso = getattr(v, "iso", None)
+        inside = txt is not None and (not iso or level_of(v, txt) is not None)
+        if txt is not None and txt.group() is not None and inside:   # a text in a group (table numbers ...): edit it at once
             v.tools["text"].edit(txt)
             return
         it = hit_item(v, p)
