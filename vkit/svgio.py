@@ -53,7 +53,7 @@ def _text_origin(it):
     """for a text object whose outline is still the text: (x, y of the first baseline) - else None"""
     from .tools import text_path
     m = it.meta or {}
-    if it.kind != "text" or not m.get("text"):
+    if it.kind != "text" or not m.get("text") or m.get("on_path"):      # text along a path is written as its outlines
         return None
     ref = text_path(m)
     rb, cb = ref.boundingRect(), it.path().boundingRect()
@@ -127,6 +127,9 @@ def export_svg(scene, page, items=None, layers=None):
                      f"line-height:{lh:.2f}px")
             spans = "".join(f'<tspan sodipodi:role="line" x="{org[0]:.3f}" y="{org[1] + k * lh:.3f}">{_esc(line) or " "}</tspan>'
                             for k, line in enumerate(m["text"].split("\n")))
+            if m.get("angle"):
+                r = QTransform(); r.translate(org[0], org[1]); r.rotate(m["angle"]); r.translate(-org[0], -org[1])
+                t = r * t
             body.append(f'{ind}<text xml:space="preserve"{nm} style="{style}" fill="{fill}"{st}{op}{_matrix(t)}>{spans}</text>')
             return
         rule = ' fill-rule="evenodd"' if it.path().fillRule() == Qt.OddEvenFill else ""
@@ -150,8 +153,9 @@ def export_svg(scene, page, items=None, layers=None):
             if it.isVisible():
                 emit(it, "  ")
     w, h = page.w_mm, page.h_mm
+    ox, oy = page.rect.x(), page.rect.y()                    # the active artboard
     return (f'<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="{INK}" xmlns:sodipodi="{SODI}" '
-            f'width="{w:g}mm" height="{h:g}mm" viewBox="0 0 {w * PX_PER_MM:.3f} {h * PX_PER_MM:.3f}">\n'
+            f'width="{w:g}mm" height="{h:g}mm" viewBox="{ox:.3f} {oy:.3f} {w * PX_PER_MM:.3f} {h * PX_PER_MM:.3f}">\n'
             + ("<defs>" + "".join(defs) + "</defs>\n" if defs else "")
             + "\n".join(body) + "\n</svg>\n")
 
@@ -325,7 +329,7 @@ def _len(v, default=0.0):
 
 _CSS = {}                                  # class name -> {property: value}  (Illustrator writes its colours this way)
 _PROPS = ("fill", "stroke", "stroke-width", "opacity", "fill-rule", "stroke-linejoin", "stroke-linecap", "stroke-dasharray",
-          "font-family", "font-size", "font-weight", "font-style")
+          "font-family", "font-size", "font-weight", "font-style", "text-anchor", "dominant-baseline")
 _NOT_INHERITED = ()
 
 
@@ -397,6 +401,45 @@ def _family(v):
     first = plain[0] if plain else (names[0] if names else "Sans Serif")
     first = first.partition("-")[0] if "-" in first and " " not in first else first
     return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", first), bold, italic
+
+
+def _anchor_shift(meta, size, pos, st):
+    """text-anchor (start / middle / end) and dominant-baseline (central, middle, hanging ...) -> the baseline start point"""
+    from PySide6.QtGui import QFont, QFontMetricsF
+    anchor = (st.get("text-anchor") or "start").strip()
+    base = (st.get("dominant-baseline") or "auto").strip()
+    if anchor in ("start", "inherit") and base in ("auto", "alphabetic", "inherit"):
+        return pos
+    f = QFont(meta["family"]); f.setPixelSize(max(1, int(round(size))))
+    f.setBold(meta["bold"]); f.setItalic(meta["italic"])
+    fm = QFontMetricsF(f)
+    x, y = pos
+    w = max(fm.horizontalAdvance(line) for line in meta["text"].split("\n"))
+    if anchor == "middle":
+        x -= w / 2
+    elif anchor == "end":
+        x -= w
+    if base in ("central", "mathematical"):
+        y += (fm.ascent() - fm.descent()) / 2
+    elif base == "middle":
+        y += fm.xHeight() / 2
+    elif base in ("hanging", "text-before-edge"):
+        y += fm.ascent()
+    elif base in ("text-after-edge", "ideographic"):
+        y -= fm.descent()
+    return x, y
+
+
+def _is_page_background(el, vb):
+    """a plain white rectangle that fills the whole page: the page itself, not a shape to click on"""
+    if el.tag.split("}")[-1] != "rect" or vb is None:
+        return False
+    st = _style(el, {})
+    if (_color(st.get("fill", "#000000")) or "").lower() not in ("#ffffff", "#fff", "white") or st.get("stroke") not in (None, "none"):
+        return False
+    vx, vy, vw, vh = vb
+    x, y, w, h = _len(el.get("x")), _len(el.get("y")), _len(el.get("width")), _len(el.get("height"))
+    return x <= vx + 0.5 and y <= vy + 0.5 and x + w >= vx + vw - 0.5 and y + h >= vy + vh - 0.5
 
 
 def import_svg(text, scene, with_layers=False):
@@ -548,7 +591,16 @@ def import_svg(text, scene, with_layers=False):
                 "bold": fb or (st2.get("font-weight") or "normal") in ("bold", "bolder", "600", "700", "800", "900"),
                 "italic": fi or (st2.get("font-style") or "normal") in ("italic", "oblique")}
         rotated = abs(T.m12()) > 1e-6 or abs(T.m21()) > 1e-6 or T.m11() < 0 or T.m22() < 0
+        pos = _anchor_shift(meta, size, pos, st2)
         o = T.map(QPointF(*pos))
+        a, b, c, d = T.m11(), T.m12(), T.m21(), T.m22()
+        tol = 1e-3 * max(abs(a), abs(b), abs(c), abs(d), 1e-9)
+        if st2.get("text-anchor", "start").strip() in ("middle", "end"):
+            meta["anchor"] = st2["text-anchor"].strip()          # editing keeps the text centred (or right-aligned)
+        if rotated and abs(a - d) < tol and abs(b + c) < tol and a * d - b * c > 0:
+            # turned (not mirrored or squashed): stays editable text with its angle
+            meta["angle"] = round(math.degrees(math.atan2(b, a)) % 360, 4)
+            rotated = False
         if rotated:
             p = T.map(text_path(dict(meta, size=size), QPointF(*pos)))
         else:
@@ -613,7 +665,8 @@ def import_svg(text, scene, with_layers=False):
     tops = [c for c in root if c.tag.split("}")[-1] not in ("defs", "namedview", "metadata", "title", "desc", "style")]
     layer_els = [c for c in tops if is_layer(c)]
     gs = [c for c in tops if c.tag.split("}")[-1] == "g"]
-    if len(layer_els) < len(gs) and len(gs) >= 2 and len(gs) == len(tops) and all(g.get("id") or _attr(g, "label") for g in gs):
+    tops = [c for c in tops if not _is_page_background(c, (vx, vy, vw, vh) if vb else None)]
+    if len(layer_els) < len(gs) and len(gs) >= 2 and all(g.get("id") or _attr(g, "label") for g in gs):
         layer_els = gs                                  # Illustrator: every top-level group with a name is a layer
     layers, top = [], []
     if with_layers and layer_els and len(layer_els) == len(gs):
@@ -638,7 +691,7 @@ def import_svg(text, scene, with_layers=False):
                 it.layer = lid
                 top.append(it)
     else:
-        for c in root:
+        for c in tops:
             walk(c, {"fill": "#000000"}, base, top)
     for it in top:
         scene.addItem(it)

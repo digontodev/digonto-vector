@@ -28,17 +28,73 @@ def top_of(it):
     return it
 
 
+def level_of(v, it):
+    """the item that a click picks: the top-level object, or - inside an opened (isolated) group - its direct child"""
+    iso = getattr(v, "iso", None)
+    if not iso:
+        return top_of(it)
+    g = iso[-1]
+    while it is not None and it.group() is not g:
+        it = it.group()
+    return it                                   # None when the item is outside the opened group
+
+
 def hit_item(v, pos, tol_px=5):
     t = tol_px / v.zoom_factor()
     for it in v.scene_.items(QRectF(pos.x() - t, pos.y() - t, 2 * t, 2 * t), Qt.IntersectsItemShape, Qt.DescendingOrder):
-        top = top_of(it)
-        if isinstance(top, (VItem, VGroup)) and top.isVisible() and not top.is_locked():
+        top = level_of(v, it)
+        if isinstance(top, (VItem, VGroup)) and top.isVisible() and not top_of(top).is_locked():
             return top
     for it in v.scene_.items(QRectF(pos.x(), pos.y(), 0.01, 0.01), Qt.IntersectsItemBoundingRect, Qt.DescendingOrder):    # text: the whole box counts
-        top = top_of(it)
-        if isinstance(top, VItem) and top.kind == "text" and top.isVisible() and not top.is_locked():
+        top = level_of(v, it)
+        if isinstance(top, VItem) and top.kind == "text" and top.isVisible() and not top_of(top).is_locked():
             return top
     return None
+
+
+def path_to_list(pa):
+    """a QPainterPath as a plain list (for saving): [[type, x, y], ...]"""
+    return [[pa.elementAt(i).type.value if hasattr(pa.elementAt(i).type, "value") else int(pa.elementAt(i).type),
+             round(pa.elementAt(i).x, 3), round(pa.elementAt(i).y, 3)] for i in range(pa.elementCount())]
+
+
+def path_from_list(lst):
+    pa = QPainterPath()
+    i = 0
+    while i < len(lst):
+        t, x, y = lst[i]
+        if t == 0:
+            pa.moveTo(x, y)
+        elif t == 1:
+            pa.lineTo(x, y)
+        elif t == 2 and i + 2 < len(lst):
+            pa.cubicTo(x, y, lst[i + 1][1], lst[i + 1][2], lst[i + 2][1], lst[i + 2][2])
+            i += 2
+        i += 1
+    return pa
+
+
+def _text_along(meta, f):
+    """the letters set one by one along a path (type on a path, as in Illustrator)"""
+    from PySide6.QtGui import QFontMetricsF
+    guide = path_from_list(meta["on_path"])
+    total = guide.length()
+    fm = QFontMetricsF(f)
+    out = QPainterPath()
+    s = float(meta.get("path_start", 0.0)) * total
+    shift = -fm.ascent() * 0.0 + float(meta.get("baseline_shift", 0.0))
+    for ch in meta.get("text", "").replace("\n", " "):
+        adv = fm.horizontalAdvance(ch)
+        mid = s + adv / 2
+        if mid > total:
+            break
+        t = guide.percentAtLength(mid)
+        pt, ang = guide.pointAtPercent(t), guide.angleAtPercent(t)
+        g = QPainterPath()
+        g.addText(-adv / 2, shift, f, ch)
+        out.addPath(QTransform().translate(pt.x(), pt.y()).rotate(-ang).map(g))
+        s += adv
+    return out
 
 
 def text_path(meta, origin=QPointF(0, 0)):
@@ -46,12 +102,47 @@ def text_path(meta, origin=QPointF(0, 0)):
     f.setPixelSize(max(1, int(round(meta.get("size", 48)))))
     f.setBold(meta.get("bold", False))
     f.setItalic(meta.get("italic", False))
+    if meta.get("on_path"):
+        p = _text_along(meta, f)
+        p.translate(origin)
+        return p
     p = QPainterPath()
     lh = QFontMetricsF_height(f)
     for i, line in enumerate(meta.get("text", "").split("\n")):
         p.addText(0, i * lh, f, line)
+    a = meta.get("angle", 0)
+    if a:
+        p = QTransform().rotate(a).map(p)              # turned around the start of the first baseline
     p.translate(origin)
     return p
+
+
+_ROT = []
+
+
+def ROTATE_CURSOR():
+    """a curved double arrow, drawn once"""
+    if not _ROT:
+        from PySide6.QtGui import QCursor, QPixmap, QPainter
+        pm = QPixmap(24, 24); pm.fill(Qt.transparent)
+        q = QPainter(pm); q.setRenderHint(QPainter.Antialiasing)
+        for col, w in ((QColor("#FFFFFF"), 4.0), (QColor("#000000"), 1.6)):
+            q.setPen(QPen(col, w, Qt.SolidLine, Qt.RoundCap)); q.setBrush(Qt.NoBrush)
+            q.drawArc(QRectF(5, 5, 14, 14), 20 * 16, 140 * 16)
+            for (x, y, dx, dy) in ((18.6, 9.6, -3.5, -0.5), (18.6, 9.6, 0.5, -3.5), (5.4, 9.6, 3.5, -0.5), (5.4, 9.6, -0.5, -3.5)):
+                q.drawLine(QPointF(x, y), QPointF(x + dx, y + dy))
+        q.end()
+        _ROT.append(QCursor(pm, 12, 12))
+    return _ROT[0]
+
+
+def hit_text(v, pos):
+    """the text object under pos, also inside a group (a table number in a seating plan ...)"""
+    t = 3 / v.zoom_factor()
+    for it in v.scene_.items(QRectF(pos.x() - t, pos.y() - t, 2 * t, 2 * t), Qt.IntersectsItemBoundingRect, Qt.DescendingOrder):
+        if isinstance(it, VItem) and it.kind == "text" and it.isVisible() and not top_of(it).is_locked():
+            return it
+    return None
 
 
 def QFontMetricsF_height(f):
@@ -105,16 +196,30 @@ class SelectTool(Tool):
                 return i
         return None
 
+    def in_rotate_zone(self, p):
+        """just outside a corner of the selection box: drag there to rotate (as in Illustrator)"""
+        r = self.bbox()
+        if r is None:
+            return False
+        z = self.v.zoom_factor()
+        if r.adjusted(-2 / z, -2 / z, 2 / z, 2 / z).contains(p):
+            return False
+        for c in (r.topLeft(), r.topRight(), r.bottomLeft(), r.bottomRight()):
+            if math.hypot(p.x() - c.x(), p.y() - c.y()) * z < 22:
+                return True
+        return False
+
     def press(self, p, e):
         v = self.v
         if e.button() != Qt.LeftButton:
             return
         self.start = QPointF(p)
         self.moved = False
+        self.key_click = None
         h = self.hit_handle(p)
         sel = v.selected()
-        if h is not None:
-            self.mode = "rotate" if h == 8 else "scale"
+        if h is not None or self.in_rotate_zone(p):
+            self.mode = "rotate" if (h is None or h == 8) else "scale"
             self.h = h
             self.r0 = self.bbox()
             self.snapshot()
@@ -127,6 +232,8 @@ class SelectTool(Tool):
                 it.setSelected(not it.isSelected())
                 self.mode = None
                 return
+            if it.isSelected() and len(sel) > 1:
+                self.key_click = it                     # a click (no drag) on one of several: the key object
             if not it.isSelected():
                 v.scene_.clearSelection()
                 it.setSelected(True)
@@ -145,18 +252,37 @@ class SelectTool(Tool):
 
     def snapshot(self):
         self.orig = []
+        self.copied = False
         for it in self.v.selected():
             for lf in (it.leaves() if isinstance(it, VGroup) else [it]):
-                self.orig.append((lf, lf.path()))
+                self.orig.append((lf, lf.path(), (lf.meta or {}).get("angle", 0) if lf.kind == "text" else 0))
 
     def apply(self, T):
-        for lf, path in self.orig:
+        a, b, c, d = T.m11(), T.m12(), T.m21(), T.m22()
+        turn = abs(a * d - b * c - 1) < 1e-4 and abs(a - d) < 1e-6 and abs(b + c) < 1e-6
+        deg = math.degrees(math.atan2(b, a)) if turn else 0
+        for lf, path, ang0 in self.orig:
             lf.set_path(T.map(path))
+            if lf.kind == "text" and lf.meta and turn:          # turned text stays editable text
+                ang = (ang0 + deg) % 360
+                lf.meta["angle"] = 0 if abs(ang) < 1e-6 or abs(ang - 360) < 1e-6 else round(ang, 4)
         self.moved = True
+        self.last_T = T
+
+    def leave_copies(self):
+        """Alt + drag (as in Illustrator): copies stay where the objects were, the objects themselves move"""
+        from .model import item_from_json
+        for it in self.v.selected():
+            c = item_from_json(it.to_json())
+            c.setZValue(it.zValue() - 0.5)
+            self.v.scene_.addItem(c)
+        self.copied = True
 
     def move(self, p, e):
         v = self.v
         if not self.dragging:
+            want = ROTATE_CURSOR() if self.in_rotate_zone(p) else Qt.ArrowCursor
+            v.viewport().setCursor(want)
             return
         if self.mode == "band":
             self.band = QRectF(self.start, p).normalized()
@@ -165,6 +291,8 @@ class SelectTool(Tool):
             d = p - self.start
             if not self.moved and math.hypot(d.x(), d.y()) * v.zoom_factor() < 3:
                 return
+            if not self.moved and (e.modifiers() & Qt.AltModifier) and not self.copied:
+                self.leave_copies()
             if e.modifiers() & Qt.ShiftModifier:
                 if abs(d.x()) > abs(d.y()):
                     d = QPointF(d.x(), 0)
@@ -173,7 +301,7 @@ class SelectTool(Tool):
             r = self.r0
             best = [d.x(), d.y()]
             bdx = bdy = 1e9
-            if not (e.modifiers() & Qt.AltModifier):
+            if not (e.modifiers() & Qt.ControlModifier):       # Ctrl: no snapping (Alt now copies, as in Illustrator)
                 for q in (r.topLeft(), r.center(), r.bottomRight()):
                     s = v.snap_pt(q + d, exclude=v.selected())
                     ax, ay = s.x() - (q.x() + d.x()), s.y() - (q.y() + d.y())
@@ -212,6 +340,7 @@ class SelectTool(Tool):
             T = QTransform()
             T.translate(ax, ay); T.scale(sx, sy); T.translate(-ax, -ay)
             self.apply(T)
+            self.last_op = ("scale", sx, sy)
             return
         if self.mode == "rotate":
             c = self.r0.center()
@@ -223,25 +352,49 @@ class SelectTool(Tool):
             T = QTransform()
             T.translate(c.x(), c.y()); T.rotate(ang); T.translate(-c.x(), -c.y())
             self.apply(T)
+            self.last_op = ("rotate", ang)
 
     def release(self, p, e):
         v = self.v
         self.dragging = False
         v._snap_marker = None
         if self.mode == "band":
-            for it in top_level(v.scene_):
+            for it in (v.iso[-1].childItems() if getattr(v, "iso", None) else top_level(v.scene_)):
                 if it.isVisible() and not it.is_locked() and self.band.contains(geom_rect(it)):
                     it.setSelected(True)
             self.mode = None
             return
+        if self.mode == "move" and not self.moved and getattr(self, "key_click", None) is not None:
+            v.key_object = None if v.key_object is self.key_click else self.key_click
+            v.message.emit("Key object set: Align moves the others to it" if v.key_object else "Key object cleared")
         if self.mode in ("move", "scale", "rotate") and self.moved:
-            v.commit({"move": "Move", "scale": "Resize", "rotate": "Rotate"}[self.mode])
+            if self.mode == "move":
+                self.last_op = ("move", self.last_T.dx(), self.last_T.dy())
+            v.last_transform = self.last_op + (("copy",) if self.copied else ())   # for Transform again (Ctrl+D)
+            if self.copied:
+                from .ops import normalize_z
+                normalize_z(v)
+            v.commit({"move": "Copy" if self.copied else "Move", "scale": "Resize", "rotate": "Rotate"}[self.mode])
         self.mode = None
         self.orig = []
 
     def double(self, p, e):
-        it = hit_item(self.v, p)
+        """as in Illustrator: double-click a group to open it (isolation mode), again to go deeper, a path to edit its
+        nodes; double-click on empty space goes back out one level"""
+        v = self.v
+        txt = hit_text(v, p)
+        iso = getattr(v, "iso", None)
+        inside = txt is not None and (not iso or level_of(v, txt) is not None)
+        if txt is not None and txt.group() is not None and inside:   # a text in a group (table numbers ...): edit it at once
+            v.tools["text"].edit(txt)
+            return
+        it = hit_item(v, p)
         if it is None:
+            if getattr(v, "iso", None):
+                v.leave_group()
+            return
+        if isinstance(it, VGroup):
+            v.enter_group(it)
             return
         self.v.scene_.clearSelection()
         it.setSelected(True)
@@ -259,7 +412,10 @@ class SelectTool(Tool):
             v.commit("Delete")
             return True
         if k == Qt.Key_Escape:
-            v.scene_.clearSelection()
+            if getattr(v, "iso", None):
+                v.leave_group()                 # Esc: out of the opened group, one level (as in Illustrator)
+            else:
+                v.scene_.clearSelection()
             return True
         d = {Qt.Key_Left: (-1, 0), Qt.Key_Right: (1, 0), Qt.Key_Up: (0, -1), Qt.Key_Down: (0, 1)}.get(k)
         if d and v.selected():
@@ -282,6 +438,9 @@ class SelectTool(Tool):
             return
         pt.setPen(QPen(BLUE, 0, Qt.DashLine)); pt.setBrush(Qt.NoBrush)
         pt.drawRect(r)
+        ko = getattr(v, "key_object", None)
+        if ko is not None and ko.scene() is v.scene_ and ko.isSelected():
+            pt.setPen(QPen(BLUE, 3 / z)); pt.drawRect(geom_rect(ko))
         hs = self.handles(r, z)
         pt.drawLine(hs[1], hs[8])
         pt.setPen(QPen(BLUE, 0)); pt.setBrush(QColor("#FFFFFF"))
@@ -891,8 +1050,8 @@ class TextTool(Tool):
     def press(self, p, e):
         if e.button() != Qt.LeftButton:
             return
-        it = hit_item(self.v, p)
-        if isinstance(it, VItem) and it.kind == "text":
+        it = hit_text(self.v, p)
+        if it is not None:
             self.edit(it)
             return
         meta = dict(self.v.text_opt)
@@ -917,8 +1076,17 @@ class TextTool(Tool):
         top_left = it.path().boundingRect().topLeft()
         old = text_path(it.meta)
         origin = it.path().boundingRect().topLeft() - old.boundingRect().topLeft()
+        before = it.path().boundingRect()
         it.meta["text"] = text
-        it.set_path(text_path(it.meta, origin))
+        p = text_path(it.meta, origin)
+        anchor = it.meta.get("anchor")
+        if anchor in ("middle", "end"):                  # centred labels (table numbers ...) stay centred
+            after = p.boundingRect()
+            if anchor == "middle" or it.meta.get("angle"):
+                p.translate(before.center() - after.center())
+            else:
+                p.translate(before.right() - after.right(), 0)
+        it.set_path(p)
         self.v.commit("Edit text")
 
     def restyle_selected(self):
@@ -954,6 +1122,163 @@ class EyedropperTool(Tool):
             self.v.commit("Copy style")
         self.v.message.emit("Style picked" + (" and applied" if targets else ""))
         self.v.toolRequest.emit("_style_changed")
+
+
+class ShapeBuilderTool(Tool):
+    """Shape Builder (Shift+M, as in Illustrator): select overlapping shapes, then drag across pieces to join them
+    into one shape; Alt + click (or drag) removes pieces. Every other piece stays a shape of its own."""
+    cursor = Qt.CrossCursor
+
+    def activate(self):
+        self.pieces, self.picked, self.hover, self.dragging = [], [], None, False
+        self.rebuild()
+
+    def rebuild(self):
+        from .ops import divide_pieces, flat
+        items = [i for i in flat(self.v.selected()) if isinstance(i, VItem) and i.kind != "text"]
+        self.items = items
+        self.pieces = divide_pieces([i.path() for i in items], items) if len(items) >= 2 else []
+        if len(items) < 2:
+            self.v.message.emit("Shape Builder: first select two or more overlapping shapes")
+        self.v.viewport().update()
+
+    def _at(self, p):
+        for k in range(len(self.pieces) - 1, -1, -1):
+            if self.pieces[k][0].contains(p):
+                return k
+        return None
+
+    def press(self, p, e):
+        if not self.pieces:
+            self.rebuild()
+        self.remove = bool(e.modifiers() & Qt.AltModifier)
+        self.dragging = True
+        k = self._at(p)
+        self.picked = [k] if k is not None else []
+        self.v.viewport().update()
+
+    def move(self, p, e):
+        k = self._at(p)
+        self.hover = k
+        if self.dragging and k is not None and k not in self.picked:
+            self.picked.append(k)
+        self.v.viewport().update()
+
+    def release(self, p, e):
+        if not self.dragging:
+            return
+        self.dragging = False
+        v = self.v
+        if not self.picked:
+            return
+        from .ops import normalize_z, select
+        z = max(i.zValue() for i in self.items)
+        lay = self.items[-1].layer if hasattr(self.items[-1], "layer") else None
+        for i in self.items:
+            if i.scene() is v.scene_:
+                v.scene_.removeItem(i)
+        new = []
+        joined = QPainterPath()
+        for k in self.picked:
+            joined = joined.united(self.pieces[k][0])
+        src0 = self.pieces[self.picked[0]][1]
+        for k, (pa, src) in enumerate(self.pieces):
+            if k in self.picked:
+                continue
+            n = VItem(pa, dict(src.fill), dict(src.stroke)); n.layer = lay; new.append(n)
+        if not self.remove:
+            n = VItem(joined.simplified(), dict(src0.fill), dict(src0.stroke)); n.layer = lay; new.append(n)
+        for k, n in enumerate(new):
+            n.setZValue(z + k * 1e-3)
+            v.scene_.addItem(n)
+        normalize_z(v)
+        select(v, new)
+        v.commit("Shape builder: remove" if self.remove else "Shape builder: join")
+        self.picked = []
+        self.rebuild()
+
+    def paint(self, pt, z):
+        if not self.pieces:
+            return
+        pt.setBrush(Qt.NoBrush)
+        pt.setPen(QPen(BLUE, 0, Qt.DotLine))
+        for pa, _src in self.pieces:
+            pt.drawPath(pa)
+        show = list(self.picked) + ([self.hover] if self.hover is not None and not self.dragging else [])
+        col = QColor(220, 40, 60, 90) if getattr(self, "remove", False) and self.dragging else QColor(45, 108, 223, 80)
+        for k in show:
+            if 0 <= k < len(self.pieces):
+                pt.setBrush(col)
+                pt.setPen(QPen(BLUE, 0))
+                pt.drawPath(self.pieces[k][0])
+
+
+class ArtboardTool(Tool):
+    """Artboard (Shift+O, as in Illustrator): click an artboard to make it active, drag it to move it with its
+    artwork, drag on empty space to draw a new one. Delete removes the active artboard (the artwork stays)."""
+    cursor = Qt.CrossCursor
+
+    def press(self, p, e):
+        v = self.v
+        self.a = self.b = QPointF(p)
+        self.dragging = True
+        i = v.page.index_at(p)
+        if i >= 0:
+            v.page.active = i
+            self.mode = "move"
+            r = v.page.rect_of(i)
+            self.items = [it for it in top_level(v.scene_) if r.contains(geom_rect(it).center()) and not it.is_locked()]
+            self.orig = (v.page.boards[i]["x"], v.page.boards[i]["y"])
+            self.snap = [(lf, lf.path()) for it in self.items for lf in (it.leaves() if isinstance(it, VGroup) else [it])]
+            v.message.emit(f"{v.page.boards[i]['name']} — drag to move it with its artwork")
+            v.layersChanged.emit()
+        else:
+            self.mode = "new"
+        v.viewport().update()
+
+    def move(self, p, e):
+        if not self.dragging:
+            return
+        self.b = QPointF(p)
+        if self.mode == "move":
+            d = self.b - self.a
+            b = self.v.page.board
+            b["x"], b["y"] = self.orig[0] + d.x() / PX_PER_MM, self.orig[1] + d.y() / PX_PER_MM
+            T = QTransform.fromTranslate(d.x(), d.y())
+            for lf, path in self.snap:                     # the artwork moves along
+                lf.set_path(T.map(path))
+        self.v.viewport().update()
+
+    def release(self, p, e):
+        if not self.dragging:
+            return
+        self.dragging = False
+        v = self.v
+        r = QRectF(self.a, self.b).normalized()
+        if self.mode == "new":
+            if r.width() * v.zoom_factor() > 10 and r.height() * v.zoom_factor() > 10:
+                v.page.add(r.width() / PX_PER_MM, r.height() / PX_PER_MM, r.x() / PX_PER_MM, r.y() / PX_PER_MM)
+                v.commit("New artboard")
+                v.layersChanged.emit()
+        elif (self.b - self.a).manhattanLength() > 0.5:
+            v.commit("Move artboard")
+        v.viewport().update()
+
+    def key(self, e):
+        v = self.v
+        if e.key() in (Qt.Key_Delete, Qt.Key_Backspace) and len(v.page.boards) > 1:
+            del v.page.boards[v.page.active]
+            v.page.active = max(0, v.page.active - 1)
+            v.commit("Delete artboard")
+            v.layersChanged.emit()
+            v.viewport().update()
+            return True
+        return False
+
+    def paint(self, pt, z):
+        if self.dragging and self.mode == "new":
+            pt.setPen(QPen(BLUE, 0, Qt.DashLine)); pt.setBrush(Qt.NoBrush)
+            pt.drawRect(QRectF(self.a, self.b).normalized())
 
 
 class ZoomTool(Tool):

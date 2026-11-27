@@ -6,7 +6,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QCursor, QPainter, QPen, QTransform
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsView
 
-from .model import (DEFAULT_LAYERS, PX_PER_MM, Page, VGroup, VItem, dump_scene, geom_rect, item_from_json, layers_from, load_into,
+from .model import (VScene, DEFAULT_LAYERS, PX_PER_MM, Page, VGroup, VItem, dump_scene, geom_rect, item_from_json, layers_from, load_into,
                     top_level, union_rect)
 
 
@@ -21,7 +21,8 @@ class VectorView(QGraphicsView):
 
     def __init__(self):
         super().__init__()
-        self.scene_ = QGraphicsScene(self)
+        self.scene_ = VScene(self)
+        self.key_object = None
         self.scene_.setSceneRect(-20000, -20000, 40000, 40000)
         self.setScene(self.scene_)
         self.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform | QPainter.TextAntialiasing)
@@ -71,7 +72,51 @@ class VectorView(QGraphicsView):
 
     # ------------------------------------------------------------ document
     def selected(self):
+        iso = getattr(self, "iso", None)
+        if iso:                                   # inside an opened group: its own objects
+            return [i for i in self.scene_.iso_sel if i.group() is iso[-1] and i.scene() is self.scene_]
         return [i for i in self.scene_.selectedItems() if i.group() is None]
+
+    # ---- isolation mode (as in Illustrator): work inside a group, the rest is faded
+    def _sync_iso(self):
+        self.scene_.iso_group = self.iso[-1] if getattr(self, "iso", None) else None
+        self.scene_.iso_sel = []
+
+    def enter_group(self, g):
+        self.scene_.clearSelection()
+        self.iso = list(getattr(self, "iso", [])) + [g]
+        self._sync_iso()
+        self.message.emit("Inside the group: click to pick parts, double-click to go deeper, Esc or double-click outside to leave")
+        self.viewport().update()
+        self.selectionChanged2.emit()
+
+    def leave_group(self):
+        if getattr(self, "iso", None):
+            self.scene_.clearSelection()
+            g = self.iso.pop()
+            self._sync_iso()
+            g.setSelected(True)
+            self.viewport().update()
+            self.selectionChanged2.emit()
+
+    def _iso_path(self):
+        """the opened groups as positions (to find them again after undo)"""
+        out, parent = [], None
+        for g in getattr(self, "iso", []):
+            sib = top_level(self.scene_) if parent is None else parent.childItems()
+            if g not in sib:
+                return []
+            out.append(sib.index(g))
+            parent = g
+        return out
+
+    def _iso_from(self, path):
+        self.iso, parent = [], None
+        for k in path:
+            sib = top_level(self.scene_) if parent is None else parent.childItems()
+            if not (0 <= k < len(sib)) or not hasattr(sib[k], "leaves"):
+                break
+            self.iso.append(sib[k]); parent = sib[k]
 
     def snapshot(self):
         return json.dumps(dump_scene(self.scene_, self.page, self.guides, self.layers))
@@ -128,6 +173,9 @@ class VectorView(QGraphicsView):
         self.viewport().update()
 
     def restore(self, snap):
+        iso_path = self._iso_path()
+        self.iso = []
+        self._sync_iso()
         sel_idx = [top_level(self.scene_).index(i) for i in self.selected() if i in top_level(self.scene_)]
         self.scene_.blockSignals(True)
         data = json.loads(snap)
@@ -136,6 +184,8 @@ class VectorView(QGraphicsView):
         if self.layer_index(self.cur_layer) < 0:
             self.cur_layer = self.layers[0]["id"]
         self.apply_layers()
+        self._iso_from(iso_path)                  # stay inside the same opened group after undo / redo
+        self._sync_iso()
         self.layersChanged.emit()
         self.scene_.blockSignals(False)
         tl = top_level(self.scene_)
@@ -163,6 +213,8 @@ class VectorView(QGraphicsView):
             self.message.emit(f"Redo: {label}")
 
     def new_document(self, w_mm=210.0, h_mm=297.0):
+        self.iso = []
+        self._sync_iso()
         for i in top_level(self.scene_):
             self.scene_.removeItem(i)
         self.page = Page(w_mm, h_mm)
@@ -179,6 +231,9 @@ class VectorView(QGraphicsView):
         self.docChanged.emit()
 
     def _sel_changed(self):
+        ko = getattr(self, "key_object", None)
+        if ko is not None and (ko.scene() is not self.scene_ or not ko.isSelected() or len(self.selected()) < 2):
+            self.key_object = None
         self.selectionChanged2.emit()
         self.viewport().update()
 
@@ -266,9 +321,19 @@ class VectorView(QGraphicsView):
     # ------------------------------------------------------------ drawing
     def drawBackground(self, p, rect):
         super().drawBackground(p, rect)
+        z = self.zoom_factor()
+        many = len(self.page.boards) > 1
+        for i in range(len(self.page.boards)):          # every artboard: white with a shadow, its name above it
+            r = self.page.rect_of(i)
+            p.fillRect(r.translated(5 / z, 5 / z), QColor(0, 0, 0, 70))
+            p.fillRect(r, QColor("#FFFFFF"))
+            if many:
+                f = p.font(); f.setPixelSize(max(1, int(12 / z))); p.setFont(f)
+                p.setPen(QPen(QColor("#2D6CDF") if i == self.page.active else QColor(90, 90, 90), 0))
+                p.drawText(QPointF(r.left(), r.top() - 5 / z), self.page.boards[i]["name"])
+                if i != self.page.active:
+                    p.setPen(QPen(QColor(0, 0, 0, 90), 0)); p.setBrush(Qt.NoBrush); p.drawRect(r)
         pr = self.page.rect
-        p.fillRect(pr.translated(5 / self.zoom_factor(), 5 / self.zoom_factor()), QColor(0, 0, 0, 70))
-        p.fillRect(pr, QColor("#FFFFFF"))
         if self.grid["show"]:
             g = self.grid["mm"] * PX_PER_MM
             if g * self.zoom_factor() >= 5:
@@ -279,12 +344,33 @@ class VectorView(QGraphicsView):
                 y = math.ceil(pr.top() / g) * g
                 while y <= pr.bottom():
                     p.drawLine(QPointF(pr.left(), y), QPointF(pr.right(), y)); y += g
-        p.setPen(QPen(QColor(0, 0, 0, 90), 0))
+        p.setPen(QPen(QColor("#2D6CDF") if many else QColor(0, 0, 0, 90), (2 / z) if many else 0))
         p.setBrush(Qt.NoBrush)
         p.drawRect(pr)
 
     def drawForeground(self, p, rect):
         z = self.zoom_factor()
+        iso = getattr(self, "iso", None)
+        if iso:                                   # isolation mode: everything faded, the opened group drawn again on top
+            from PySide6.QtWidgets import QStyleOptionGraphicsItem
+            p.fillRect(rect, QColor(255, 255, 255, 170))
+            opt = QStyleOptionGraphicsItem()
+            for lf in iso[-1].leaves():
+                if lf.isVisible():
+                    p.save()
+                    p.setTransform(lf.sceneTransform(), True)
+                    lf.paint(p, opt, None)
+                    p.restore()
+            p.save()                              # where you are: Layer > Group > Group
+            p.resetTransform()
+            names = ["Layer"] + [(g.name if getattr(g, "name", "") else "Group") for g in iso]
+            txt = "  ›  ".join(names) + "      (Esc = back)"
+            f = p.font(); f.setPixelSize(13); f.setBold(True); p.setFont(f)
+            w = p.fontMetrics().horizontalAdvance(txt) + 24
+            p.fillRect(QRectF(8, 8, w, 26), QColor(45, 108, 223, 230))
+            p.setPen(QColor("white"))
+            p.drawText(QRectF(8, 8, w, 26), Qt.AlignCenter, txt)
+            p.restore()
         if self.show_guides:
             p.setPen(QPen(QColor(0, 160, 255, 200), 0, Qt.DashLine))
             for y in self.guides["h"]:

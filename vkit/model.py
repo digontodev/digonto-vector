@@ -6,7 +6,7 @@ import math
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
 from PySide6.QtGui import (QBrush, QColor, QFont, QLinearGradient, QPainterPath, QPainterPathStroker, QPen, QRadialGradient,
                            QTransform)
-from PySide6.QtWidgets import QGraphicsItem, QGraphicsItemGroup, QGraphicsPathItem, QStyle
+from PySide6.QtWidgets import QGraphicsScene, QGraphicsItem, QGraphicsItemGroup, QGraphicsPathItem, QStyle
 
 PX_PER_MM = 96.0 / 25.4
 
@@ -127,7 +127,44 @@ def make_rect(r, radius=0.0):
 
 
 # ---------------------------------------------------------------- shapes
-class VItem(QGraphicsPathItem):
+
+class _IsoSelect:
+    """inside an opened group (isolation mode) its objects can be selected one by one; Qt would always select the
+    whole group, so that selection is kept by the scene (scene.iso_sel)"""
+    def _iso_scene(self):
+        sc = self.scene()
+        return sc if sc is not None and self.group() is not None and getattr(sc, "iso_group", None) is self.group() else None
+
+    def setSelected(self, on):
+        sc = self._iso_scene()
+        if sc is None:
+            return super().setSelected(on)
+        if on and self not in sc.iso_sel:
+            sc.iso_sel.append(self)
+        elif not on and self in sc.iso_sel:
+            sc.iso_sel.remove(self)
+        sc.selectionChanged.emit()
+        sc.update()
+
+    def isSelected(self):
+        sc = self._iso_scene()
+        return self in sc.iso_sel if sc is not None else super().isSelected()
+
+
+class VScene(QGraphicsScene):
+    """the drawing's scene; also holds the selection inside an opened group"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.iso_group, self.iso_sel = None, []
+
+    def clearSelection(self):
+        had = bool(self.iso_sel)
+        self.iso_sel = []
+        super().clearSelection()
+        if had:
+            self.selectionChanged.emit()
+
+class VItem(_IsoSelect, QGraphicsPathItem):
     kind = "path"
     wire = False
 
@@ -200,8 +237,12 @@ class VItem(QGraphicsPathItem):
 
     def bake(self, t: QTransform):
         self.set_path(t.map(self.path()))
-        if "mirror_fix" in self.meta:
-            pass
+        if self.kind == "text" and self.meta:
+            # a pure turn keeps the text editable: remember the angle, the letters are rebuilt from it
+            a, b, c, d = t.m11(), t.m12(), t.m21(), t.m22()
+            if abs(a * d - b * c - 1) < 1e-4 and abs(a - d) < 1e-6 and abs(b + c) < 1e-6 and abs(b) > 1e-9:
+                ang = (self.meta.get("angle", 0) + math.degrees(math.atan2(b, a))) % 360
+                self.meta["angle"] = round(ang, 4) if abs(ang) > 1e-6 and abs(ang - 360) > 1e-6 else 0
 
     def to_json(self):
         return {"t": "item", "kind": self.kind, "path": path_to_json(self.path()), "rule": 1 if self.path().fillRule() == Qt.OddEvenFill else 0,
@@ -209,7 +250,7 @@ class VItem(QGraphicsPathItem):
                 "hidden": self.hidden, "layer": self.layer, "meta": self.meta}
 
 
-class VGroup(QGraphicsItemGroup):
+class VGroup(_IsoSelect, QGraphicsItemGroup):
     def __init__(self):
         super().__init__()
         self.name = ""
@@ -271,17 +312,82 @@ def scene_rect_of(item):
 
 # ---------------------------------------------------------------- document
 class Page:
+    """the artboards of the document (as in Illustrator). Everything that asks for "the page" (align to page,
+    export, page size, fit) works on the active artboard."""
+    GAP_MM = 20.0
+
     def __init__(self, w_mm=210.0, h_mm=297.0):
-        self.w_mm, self.h_mm = w_mm, h_mm
+        self.boards = [dict(name="Artboard 1", x=0.0, y=0.0, w=float(w_mm), h=float(h_mm))]
+        self.active = 0
+
+    @property
+    def board(self):
+        self.active = max(0, min(self.active, len(self.boards) - 1))
+        return self.boards[self.active]
+
+    @property
+    def w_mm(self):
+        return self.board["w"]
+
+    @w_mm.setter
+    def w_mm(self, v):
+        self.board["w"] = float(v)
+
+    @property
+    def h_mm(self):
+        return self.board["h"]
+
+    @h_mm.setter
+    def h_mm(self, v):
+        self.board["h"] = float(v)
+
+    def rect_of(self, i):
+        b = self.boards[i]
+        return QRectF(b["x"] * PX_PER_MM, b["y"] * PX_PER_MM, b["w"] * PX_PER_MM, b["h"] * PX_PER_MM)
 
     @property
     def rect(self):
-        return QRectF(0, 0, self.w_mm * PX_PER_MM, self.h_mm * PX_PER_MM)
+        self.board
+        return self.rect_of(self.active)
+
+    def index_at(self, p):
+        for i in range(len(self.boards) - 1, -1, -1):
+            if self.rect_of(i).contains(p):
+                return i
+        return -1
+
+    def add(self, w=None, h=None, x=None, y=None, name=None):
+        """a new artboard, by default the size of the active one, to the right of all others"""
+        w = float(w if w is not None else self.w_mm)
+        h = float(h if h is not None else self.h_mm)
+        if x is None:
+            x = max(b["x"] + b["w"] for b in self.boards) + self.GAP_MM
+            y = min(b["y"] for b in self.boards)
+        n = 1
+        names = {b["name"] for b in self.boards}
+        while f"Artboard {n}" in names:
+            n += 1
+        self.boards.append(dict(name=name or f"Artboard {n}", x=float(x), y=float(y), w=w, h=h))
+        self.active = len(self.boards) - 1
+        return self.active
+
+    def to_json(self):
+        return {"boards": [dict(b) for b in self.boards], "active": self.active}
+
+    @staticmethod
+    def from_json(data):
+        p = Page(*data.get("page", [210, 297]))
+        if data.get("boards"):
+            p.boards = [dict(name=b.get("name", f"Artboard {i + 1}"), x=float(b.get("x", 0)), y=float(b.get("y", 0)),
+                             w=float(b["w"]), h=float(b["h"])) for i, b in enumerate(data["boards"])]
+            p.active = int(data.get("active_board", 0))
+        return p
 
 
 def dump_scene(scene, page, guides, layers=None):
     items = [i.to_json() for i in scene.items(order=Qt.AscendingOrder) if i.group() is None and isinstance(i, (VItem, VGroup))]
-    return {"app": "digonto-vector", "version": 1, "page": [page.w_mm, page.h_mm], "items": items, "guides": guides, "layers": layers}
+    return {"app": "digonto-vector", "version": 1, "page": [page.boards[0]["w"], page.boards[0]["h"]], "boards": [dict(b) for b in page.boards],
+            "active_board": page.active, "items": items, "guides": guides, "layers": layers}
 
 
 def load_into(scene, data):
@@ -290,7 +396,7 @@ def load_into(scene, data):
             scene.removeItem(i)
     for d in data.get("items", []):
         scene.addItem(item_from_json(d))
-    return Page(*data.get("page", [210, 297])), data.get("guides", {"h": [], "v": []})
+    return Page.from_json(data), data.get("guides", {"h": [], "v": []})
 
 
 DEFAULT_LAYERS = [{"id": "L1", "name": "Layer 1", "visible": True, "locked": False}]
