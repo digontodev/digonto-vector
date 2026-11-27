@@ -6,7 +6,7 @@ import math
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
 from PySide6.QtGui import (QBrush, QColor, QFont, QLinearGradient, QPainterPath, QPainterPathStroker, QPen, QRadialGradient,
                            QTransform)
-from PySide6.QtWidgets import QGraphicsItem, QGraphicsItemGroup, QGraphicsPathItem, QStyle
+from PySide6.QtWidgets import QGraphicsScene, QGraphicsItem, QGraphicsItemGroup, QGraphicsPathItem, QStyle
 
 PX_PER_MM = 96.0 / 25.4
 
@@ -127,7 +127,44 @@ def make_rect(r, radius=0.0):
 
 
 # ---------------------------------------------------------------- shapes
-class VItem(QGraphicsPathItem):
+
+class _IsoSelect:
+    """inside an opened group (isolation mode) its objects can be selected one by one; Qt would always select the
+    whole group, so that selection is kept by the scene (scene.iso_sel)"""
+    def _iso_scene(self):
+        sc = self.scene()
+        return sc if sc is not None and self.group() is not None and getattr(sc, "iso_group", None) is self.group() else None
+
+    def setSelected(self, on):
+        sc = self._iso_scene()
+        if sc is None:
+            return super().setSelected(on)
+        if on and self not in sc.iso_sel:
+            sc.iso_sel.append(self)
+        elif not on and self in sc.iso_sel:
+            sc.iso_sel.remove(self)
+        sc.selectionChanged.emit()
+        sc.update()
+
+    def isSelected(self):
+        sc = self._iso_scene()
+        return self in sc.iso_sel if sc is not None else super().isSelected()
+
+
+class VScene(QGraphicsScene):
+    """the drawing's scene; also holds the selection inside an opened group"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.iso_group, self.iso_sel = None, []
+
+    def clearSelection(self):
+        had = bool(self.iso_sel)
+        self.iso_sel = []
+        super().clearSelection()
+        if had:
+            self.selectionChanged.emit()
+
+class VItem(_IsoSelect, QGraphicsPathItem):
     kind = "path"
     wire = False
 
@@ -213,7 +250,7 @@ class VItem(QGraphicsPathItem):
                 "hidden": self.hidden, "layer": self.layer, "meta": self.meta}
 
 
-class VGroup(QGraphicsItemGroup):
+class VGroup(_IsoSelect, QGraphicsItemGroup):
     def __init__(self):
         super().__init__()
         self.name = ""

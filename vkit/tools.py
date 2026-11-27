@@ -28,15 +28,26 @@ def top_of(it):
     return it
 
 
+def level_of(v, it):
+    """the item that a click picks: the top-level object, or - inside an opened (isolated) group - its direct child"""
+    iso = getattr(v, "iso", None)
+    if not iso:
+        return top_of(it)
+    g = iso[-1]
+    while it is not None and it.group() is not g:
+        it = it.group()
+    return it                                   # None when the item is outside the opened group
+
+
 def hit_item(v, pos, tol_px=5):
     t = tol_px / v.zoom_factor()
     for it in v.scene_.items(QRectF(pos.x() - t, pos.y() - t, 2 * t, 2 * t), Qt.IntersectsItemShape, Qt.DescendingOrder):
-        top = top_of(it)
-        if isinstance(top, (VItem, VGroup)) and top.isVisible() and not top.is_locked():
+        top = level_of(v, it)
+        if isinstance(top, (VItem, VGroup)) and top.isVisible() and not top_of(top).is_locked():
             return top
     for it in v.scene_.items(QRectF(pos.x(), pos.y(), 0.01, 0.01), Qt.IntersectsItemBoundingRect, Qt.DescendingOrder):    # text: the whole box counts
-        top = top_of(it)
-        if isinstance(top, VItem) and top.kind == "text" and top.isVisible() and not top.is_locked():
+        top = level_of(v, it)
+        if isinstance(top, VItem) and top.kind == "text" and top.isVisible() and not top_of(top).is_locked():
             return top
     return None
 
@@ -348,7 +359,7 @@ class SelectTool(Tool):
         self.dragging = False
         v._snap_marker = None
         if self.mode == "band":
-            for it in top_level(v.scene_):
+            for it in (v.iso[-1].childItems() if getattr(v, "iso", None) else top_level(v.scene_)):
                 if it.isVisible() and not it.is_locked() and self.band.contains(geom_rect(it)):
                     it.setSelected(True)
             self.mode = None
@@ -368,12 +379,20 @@ class SelectTool(Tool):
         self.orig = []
 
     def double(self, p, e):
-        txt = hit_text(self.v, p)
-        if txt is not None and txt.group() is not None:   # text inside a group: edit it in place
-            self.v.tools["text"].edit(txt)
+        """as in Illustrator: double-click a group to open it (isolation mode), again to go deeper, a path to edit its
+        nodes; double-click on empty space goes back out one level"""
+        v = self.v
+        txt = hit_text(v, p)
+        if txt is not None and txt.group() is not None:    # a text, even deep in groups (table numbers ...): edit it at once
+            v.tools["text"].edit(txt)
             return
-        it = hit_item(self.v, p)
+        it = hit_item(v, p)
         if it is None:
+            if getattr(v, "iso", None):
+                v.leave_group()
+            return
+        if isinstance(it, VGroup):
+            v.enter_group(it)
             return
         self.v.scene_.clearSelection()
         it.setSelected(True)
@@ -391,7 +410,10 @@ class SelectTool(Tool):
             v.commit("Delete")
             return True
         if k == Qt.Key_Escape:
-            v.scene_.clearSelection()
+            if getattr(v, "iso", None):
+                v.leave_group()                 # Esc: out of the opened group, one level (as in Illustrator)
+            else:
+                v.scene_.clearSelection()
             return True
         d = {Qt.Key_Left: (-1, 0), Qt.Key_Right: (1, 0), Qt.Key_Up: (0, -1), Qt.Key_Down: (0, 1)}.get(k)
         if d and v.selected():
